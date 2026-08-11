@@ -159,7 +159,8 @@ class Scheduler:
                      TrafficClass.MEDIA]
 
     def __init__(self, plan: ContactPlan, max_queue_bytes: float,
-                 policy: SchedulingPolicy = SchedulingPolicy.STRICT_PRIORITY):
+                 policy: SchedulingPolicy = SchedulingPolicy.STRICT_PRIORITY,
+                 priority_aware_admission: bool = True):
         if max_queue_bytes <= 0:
             raise ValueError(
                 f"max_queue_bytes ({max_queue_bytes}) must be > 0; a "
@@ -169,6 +170,13 @@ class Scheduler:
         self.plan = plan
         self.max_queue_bytes = max_queue_bytes
         self.policy = policy
+        # priority_aware_admission=False models NATIVE BPv7: BPv7 has no in-band
+        # priority field (RFC 9171), so a node can only prioritize at forwarding
+        # (drain), never at admission -- an overflowing arrival is dropped
+        # regardless of class. Set True (default) to enable the DSCP-driven
+        # priority-aware admission this project adds. Kept as an explicit knob so
+        # the paper can run native-BPv7 vs. the fix on the SAME plan+trace.
+        self.priority_aware_admission = priority_aware_admission
         self.decisions: List[SchedulingDecision] = []
 
         # Active queue: bundles that are admitted and still PENDING.
@@ -194,27 +202,92 @@ class Scheduler:
         ))
 
     # -- admission --------------------------------------------------------
-    def _try_admit(self, bundle: BundleRecord, ts: float) -> None:
-        """Attempt admission. Marks QUEUE_OVERFLOW immediately if the
-        buffer cap would be exceeded; otherwise stamps queue_admission_ts
-        and adds to the active queue."""
-        if self._active_bytes + bundle.size_bytes > self.max_queue_bytes:
-            bundle.mark(TerminalState.QUEUE_OVERFLOW, ts=ts)
-            self._log(ts, bundle, action="drop", reason="queue_overflow")
-            return
+    # PRIORITY-AWARE ADMISSION (added after the trace-driven run in
+    # analysis/run_trace_scheduler.py showed rank-0 EMERGENCY bundles lost to
+    # QUEUE_OVERFLOW under STRICT_PRIORITY: the buffer filled with science/media
+    # and a later-arriving emergency was dropped AT THE DOOR, because admission
+    # was ingress-order/class-blind while priority was only enforced at drain).
+    #
+    # Fix (option a, eviction): when an arrival does not fit, evict STRICTLY
+    # lower-priority queued PENDING bundles to make room. Never evict a bundle
+    # of equal-or-higher priority -- protecting >=-rank incumbents is what keeps
+    # per-class delivery monotonic by rank. If even sacrificing every
+    # strictly-lower-priority bundle is not enough (or none exists), the arrival
+    # overflows itself, exactly as before.
+    #
+    # Gated by policy: FIFO is the deliberate class-blind FLOOR baseline (see
+    # SchedulingPolicy.FIFO) -- its admission stays ingress-order/priority-blind
+    # too, so it keeps showing what fully naive scheduling looks like end to end.
+    # Every class-aware policy (STRICT_PRIORITY default, WFQ, WFQ_SKIP_OVER)
+    # gets priority-aware admission. Admission ranks by CLASS_SPECS rank (0 =
+    # highest); WFQ's queue_budget weights govern DRAIN fairness, not which
+    # bundle survives buffer pressure -- admission protects mission-criticality
+    # by rank, drain shares bandwidth by weight.
+    def _admission_is_priority_aware(self) -> bool:
+        return (self.priority_aware_admission
+                and self.policy is not SchedulingPolicy.FIFO)
+
+    def _admit_one(self, bundle: BundleRecord, ts: float) -> None:
         bundle.queue_admission_ts = ts
         self._active.append(bundle)
         self._active_bytes += bundle.size_bytes
 
+    def _evict_lower_priority_to_fit(self, incoming: BundleRecord,
+                                     ts: float) -> bool:
+        """Try to free room for `incoming` by evicting strictly-lower-priority
+        queued PENDING bundles. Returns True iff enough room was made.
+
+        Victim order: lowest priority first (highest rank number), and within a
+        rank the MOST-recently-arrived first -- dropping the least-waited bundle
+        of the sacrificed class preserves the longest-waiting ones, which
+        strict-priority / DRR drain in ingress order anyway. Evicted bundles are
+        marked QUEUE_OVERFLOW (dropped due to buffer, per TerminalState)."""
+        incoming_rank = CLASS_SPECS[incoming.traffic_class].rank
+        candidates = [b for b in self._active
+                      if CLASS_SPECS[b.traffic_class].rank > incoming_rank]
+        if not candidates:
+            return False  # nothing lower-priority to sacrifice
+        # Feasibility: could evicting ALL candidates ever make room? (Also
+        # covers incoming larger than the whole buffer -> never feasible.)
+        free = self.max_queue_bytes - self._active_bytes
+        if free + sum(b.size_bytes for b in candidates) < incoming.size_bytes:
+            return False
+        candidates.sort(key=lambda b: (-CLASS_SPECS[b.traffic_class].rank,
+                                       -b.ingress_ts))
+        for victim in candidates:
+            if self._active_bytes + incoming.size_bytes <= self.max_queue_bytes:
+                break
+            self._active.remove(victim)
+            self._active_bytes -= victim.size_bytes
+            victim.mark(TerminalState.QUEUE_OVERFLOW, ts=ts)
+            self._log(ts, victim, action="drop", reason="evicted_by_priority")
+        return self._active_bytes + incoming.size_bytes <= self.max_queue_bytes
+
+    def _try_admit(self, bundle: BundleRecord, ts: float) -> None:
+        """Attempt admission. If the buffer cap would be exceeded: for a
+        class-aware policy, try to evict strictly-lower-priority queued bundles
+        to make room; otherwise (FIFO, or no lower-priority victim) mark the
+        arrival QUEUE_OVERFLOW. Stamps queue_admission_ts on success."""
+        if self._active_bytes + bundle.size_bytes <= self.max_queue_bytes:
+            self._admit_one(bundle, ts)
+            return
+        if self._admission_is_priority_aware() \
+                and self._evict_lower_priority_to_fit(bundle, ts):
+            self._admit_one(bundle, ts)
+            return
+        bundle.mark(TerminalState.QUEUE_OVERFLOW, ts=ts)
+        self._log(ts, bundle, action="drop", reason="queue_overflow")
+
     def _admit_arrivals(self, pending_arrivals: List[BundleRecord],
                          cutoff_ts: float) -> List[BundleRecord]:
-        """Admit (or overflow) everything with ingress_ts <= cutoff_ts.
-        Returns the remaining not-yet-arrived bundles."""
+        """Admit everything with ingress_ts <= cutoff_ts, in ingress order.
+        Returns the remaining not-yet-arrived bundles.
+
+        Arrivals are OFFERED in ingress order (arrival is a temporal event);
+        priority enters only when the buffer is full, via _try_admit's
+        eviction of strictly-lower-priority incumbents (class-aware policies)."""
         ready = [b for b in pending_arrivals if b.ingress_ts <= cutoff_ts]
         still_future = [b for b in pending_arrivals if b.ingress_ts > cutoff_ts]
-        # Admit strictly in ingress order so admission itself doesn't
-        # silently re-prioritize arrivals (priority is applied at drain
-        # time, not at admission time).
         for b in sorted(ready, key=lambda b: b.ingress_ts):
             self._try_admit(b, ts=b.ingress_ts)
         return still_future

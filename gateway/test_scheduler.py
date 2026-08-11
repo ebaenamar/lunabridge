@@ -362,5 +362,150 @@ class TestSchedulingPolicies(unittest.TestCase):
         self.assertEqual(sci_decisions[1].action, "transmit")
 
 
+class TestPriorityAwareAdmission(unittest.TestCase):
+    """Priority-aware admission (added after analysis/run_trace_scheduler.py
+    showed rank-0 EMERGENCY lost to QUEUE_OVERFLOW under a tight buffer,
+    because admission was class-blind). Synthetic round-number windows for the
+    mechanics -- consistent with TestQueueOverflowAndSkipOver -- plus one real
+    LCRNS-plan test proving emergencies are protected end to end under buffer
+    pressure on the actual contact plan.
+
+    Window budgets are kept large so DRAIN never becomes the constraint: these
+    tests are about who gets ADMITTED, so terminal states isolate admission."""
+
+    def _one_big_window(self, rate=1000.0):
+        return ContactPlan([
+            ContactWindow(contact_id="w0", start_ts=0.0, end_ts=100.0,
+                          link_rate_bps=rate),
+        ])
+
+    def test_emergency_evicts_lower_priority_when_buffer_full(self):
+        """Buffer fills with MEDIA; a later EMERGENCY that would overflow
+        instead EVICTS the media and is admitted + delivered. The evicted
+        media becomes QUEUE_OVERFLOW with an 'evicted_by_priority' decision."""
+        sched = Scheduler(self._one_big_window(), max_queue_bytes=1000)
+
+        media = BundleRecord("media-1", "f1", TrafficClass.MEDIA,
+                             size_bytes=600, ingress_ts=0.0)
+        media.set_ttl()
+        emergency = BundleRecord("emg-1", "f2", TrafficClass.EMERGENCY,
+                                 size_bytes=600, ingress_ts=1.0)
+        emergency.set_ttl()
+
+        sched.run([media, emergency])  # 600+600=1200 > 1000 -> eviction
+
+        self.assertEqual(emergency.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(media.terminal_state, TerminalState.QUEUE_OVERFLOW)
+        evicts = [d for d in sched.decisions if d.reason == "evicted_by_priority"]
+        self.assertEqual(len(evicts), 1)
+        self.assertEqual(evicts[0].bundle_id, "media-1")
+
+    def test_never_evicts_equal_or_higher_priority(self):
+        """A MEDIA arrival cannot evict a queued EMERGENCY to admit itself --
+        the incumbent higher-priority bundle is protected and the low-priority
+        arrival overflows instead (monotonicity guard)."""
+        sched = Scheduler(self._one_big_window(), max_queue_bytes=1000)
+
+        emergency = BundleRecord("emg-1", "f1", TrafficClass.EMERGENCY,
+                                 size_bytes=600, ingress_ts=0.0)
+        emergency.set_ttl()
+        media = BundleRecord("media-1", "f2", TrafficClass.MEDIA,
+                             size_bytes=600, ingress_ts=1.0)
+        media.set_ttl()
+
+        sched.run([emergency, media])
+
+        self.assertEqual(emergency.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(media.terminal_state, TerminalState.QUEUE_OVERFLOW)
+        # overflow of the ARRIVAL is a plain queue_overflow, not an eviction
+        self.assertFalse(any(d.reason == "evicted_by_priority"
+                             for d in sched.decisions))
+
+    def test_evicts_multiple_lowest_priority_newest_first(self):
+        """One EMERGENCY needs room that only exists by evicting >1 lower
+        bundle: the fewest, NEWEST-within-rank victims are dropped, older
+        same-class bundles survive."""
+        sched = Scheduler(self._one_big_window(), max_queue_bytes=1000)
+
+        m1 = BundleRecord("m1", "f", TrafficClass.MEDIA, size_bytes=300, ingress_ts=0.0)
+        m2 = BundleRecord("m2", "f", TrafficClass.MEDIA, size_bytes=300, ingress_ts=1.0)
+        m3 = BundleRecord("m3", "f", TrafficClass.MEDIA, size_bytes=300, ingress_ts=2.0)
+        emg = BundleRecord("emg", "f", TrafficClass.EMERGENCY, size_bytes=600, ingress_ts=3.0)
+        for b in (m1, m2, m3, emg):
+            b.set_ttl()
+
+        sched.run([m1, m2, m3, emg])  # 900 used; need 500 free -> evict 2 (newest)
+
+        self.assertEqual(emg.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(m1.terminal_state, TerminalState.DELIVERED)  # oldest survives
+        self.assertEqual(m2.terminal_state, TerminalState.QUEUE_OVERFLOW)
+        self.assertEqual(m3.terminal_state, TerminalState.QUEUE_OVERFLOW)
+
+    def test_fifo_admission_stays_priority_blind(self):
+        """FIFO is the class-blind floor: the SAME scenario as the eviction
+        test must NOT evict -- media (admitted first) is delivered and the
+        later emergency overflows. Preserves the baseline's integrity."""
+        sched = Scheduler(self._one_big_window(), max_queue_bytes=1000,
+                          policy=SchedulingPolicy.FIFO)
+
+        media = BundleRecord("media-1", "f1", TrafficClass.MEDIA,
+                             size_bytes=600, ingress_ts=0.0)
+        media.set_ttl()
+        emergency = BundleRecord("emg-1", "f2", TrafficClass.EMERGENCY,
+                                 size_bytes=600, ingress_ts=1.0)
+        emergency.set_ttl()
+
+        sched.run([media, emergency])
+
+        self.assertEqual(media.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(emergency.terminal_state, TerminalState.QUEUE_OVERFLOW)
+        self.assertFalse(any(d.reason == "evicted_by_priority"
+                             for d in sched.decisions))
+
+    def test_native_bpv7_flag_disables_eviction(self):
+        """priority_aware_admission=False models native BPv7 (no in-band
+        priority): even with STRICT_PRIORITY drain, a full buffer of MEDIA is
+        NOT evicted for a later EMERGENCY, which overflows -- reproducing the
+        pre-fix failure so the paper can run native-vs-fix on one plan."""
+        sched = Scheduler(self._one_big_window(), max_queue_bytes=1000,
+                          policy=SchedulingPolicy.STRICT_PRIORITY,
+                          priority_aware_admission=False)
+
+        media = BundleRecord("media-1", "f1", TrafficClass.MEDIA,
+                             size_bytes=600, ingress_ts=0.0)
+        media.set_ttl()
+        emergency = BundleRecord("emg-1", "f2", TrafficClass.EMERGENCY,
+                                 size_bytes=600, ingress_ts=1.0)
+        emergency.set_ttl()
+
+        sched.run([media, emergency])
+
+        self.assertEqual(media.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(emergency.terminal_state, TerminalState.QUEUE_OVERFLOW)
+        self.assertFalse(any(d.reason == "evicted_by_priority"
+                             for d in sched.decisions))
+
+    def test_emergency_protected_under_buffer_pressure_real_plan(self):
+        """End-to-end on the real LCRNS 1-SV plan: a tight buffer fills with
+        SCIENCE_BULK inside the first real window; a later EMERGENCY evicts it
+        and is delivered -- the exact failure the trace-driven run surfaced,
+        now fixed, verified against the real contact plan."""
+        plan = load_lcrns_1sv_contact_plan()
+        first = plan._windows[0]  # start_sec .. end_sec, 10 Mbps, huge budget
+
+        sci = BundleRecord("sci-1", "f1", TrafficClass.SCIENCE_BULK,
+                           size_bytes=600, ingress_ts=first.start_ts)
+        sci.set_ttl()
+        emergency = BundleRecord("emg-1", "f2", TrafficClass.EMERGENCY,
+                                 size_bytes=600, ingress_ts=first.start_ts + 1.0)
+        emergency.set_ttl()
+
+        sched = Scheduler(plan, max_queue_bytes=1000)  # tight: 600+600 > 1000
+        sched.run([sci, emergency])
+
+        self.assertEqual(emergency.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(sci.terminal_state, TerminalState.QUEUE_OVERFLOW)
+
+
 if __name__ == "__main__":
     unittest.main()
