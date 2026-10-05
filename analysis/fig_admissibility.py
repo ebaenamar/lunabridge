@@ -54,9 +54,10 @@ def plan_stats(plan, rows):
                 avg_bh_bps=budget_bits/span)
 
 
-def run_class(plan, cls, ttl_s, span, dt):
-    """One class alone, sustained arrivals over the plan span, bundle TTL=ttl_s."""
-    rate = RATE[cls]
+def run_class(plan, cls, ttl_s, span, dt, rate_override=None):
+    """One class alone, sustained arrivals over the plan span, bundle TTL=ttl_s.
+    rate_override (bytes/s) replaces the class default (used for the video sweep)."""
+    rate = RATE[cls] if rate_override is None else rate_override
     size = max(1, int(rate * dt))
     b, seq = [], 0
     t = plan._windows[0].start_ts
@@ -121,11 +122,47 @@ def make_fig(outdir, dt):
     print("\nwrote", p)
 
 
+def fig_videosweep(outdir, dt):
+    """Central figure: MEDIA delivery vs TTL for a sweep of video bitrates,
+    showing the admissible-rate threshold at C_bh,eff."""
+    plan, rows = load_plan(); st = plan_stats(plan, rows)
+    bh = st['avg_bh_bps'] / 1e6
+    print(f"C_bh,eff = {bh:.2f} Mbps; admissible iff video rate <= C_bh,eff")
+    ttls = np.array([5*60, 15*60, 30*60, 3600, 2*3600, st['gmax'],
+                     8*3600, 16*3600, 86400, 3*86400, 10*86400])
+    mbps_list = [2, 4, 6, 8, 10, 12]
+    cmap = plt.cm.viridis(np.linspace(0, 0.9, len(mbps_list)))
+    fig, ax = plt.subplots(figsize=(4.8, 3.1))
+    for mbps, col in zip(mbps_list, cmap):
+        rate = mbps * 1e6 / 8.0
+        ys = [run_class(plan, TrafficClass.MEDIA, float(t), st['span'], dt,
+                        rate_override=rate)[0] for t in ttls]
+        adm = "" if mbps <= bh else "  (inadmissible)"
+        ax.plot(ttls/3600, ys, marker="o", ms=3.5, color=col, lw=1.6,
+                label=f"{mbps} Mbps{adm}")
+        print(f"  video {mbps:2d} Mbps: plateau(10d)={ys[-1]:.3f}  ceiling~{min(1,bh/mbps):.2f}")
+    ax.axvline(st['gmax']/3600, ls=":", color="gray", lw=1)
+    ax.text(st['gmax']/3600, 0.03, f"$G_{{\\max}}$={st['gmax']/3600:.1f}h",
+            rotation=90, fontsize=6.5, ha="right", va="bottom")
+    ax.axhline(1.0, ls="--", color="k", lw=0.6)
+    ax.set_xscale("log"); ax.set_xlabel("bundle lifetime TTL (h)")
+    ax.set_ylabel("video delivery ratio"); ax.set_ylim(0, 1.05)
+    ax.set_title(f"Admissible video rate ($C_{{bh,eff}}\\approx{bh:.1f}$ Mbps)", fontsize=9)
+    ax.legend(fontsize=6.3, loc="center right", title="video feed", title_fontsize=6.5)
+    ax.grid(alpha=0.3, which="both")
+    fig.tight_layout(); os.makedirs(outdir, exist_ok=True)
+    p = os.path.join(outdir, "admissibility.pdf")
+    fig.savefig(p, bbox_inches="tight"); fig.savefig(p.replace(".pdf",".png"), dpi=150, bbox_inches="tight")
+    print("wrote", p)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default="figs")
     ap.add_argument("--dt", type=float, default=300.0, help="bundle granularity (s)")
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--sweep", action="store_true", help="video-bitrate sweep (central fig)")
     a = ap.parse_args()
     if a.verify: verify(a.dt)
+    elif a.sweep: fig_videosweep(a.outdir, a.dt)
     else: make_fig(a.outdir, a.dt)
