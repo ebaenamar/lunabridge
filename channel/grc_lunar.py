@@ -29,6 +29,7 @@ exactly like the stock broker (static --ue-pathloss).
 """
 import argparse, json, signal, sys, threading, time
 
+from gnuradio import analog, blocks           # noise floor blocks
 from GRC_multi_ue_headless import multi_ue_scenario  # the deployed broker
 
 
@@ -54,10 +55,57 @@ def parse_args():
     p.add_argument('--trace-speedup', type=float, default=1.0,
                    help='replay factor: 1.0 = real lunaremu time (1 snap/s)')
     p.add_argument('--loop-trace', action='store_true', help='repeat the trace')
+    p.add_argument('--noise-amp', type=float, default=0.0,
+                   help='per-UE DL Gaussian noise amplitude. >0 inserts a '
+                        'calibrated noise floor so path loss produces real SNR '
+                        '(SNR_at_0dB ~ -20*log10(noise_amp/sig_rms)). 0 = off '
+                        '(pure attenuation, legacy). Calibrate so the UE just '
+                        'attaches at pl=0 and degrades as the rover ramps.')
     return p.parse_args()
 
 
 OUTAGE_PL_DB = 200.0  # k = 10**(-200/20) ~ 1e-10 : link effectively dark
+
+
+def measure_signal(tb, stop_evt):
+    """Tap the gNB DL stream and log its RMS so the noise floor can be
+    calibrated to a target SNR (noise_amp = rms * 10^(-SNR_dB/20))."""
+    rms = blocks.rms_cf(0.0001)
+    probe = blocks.probe_signal_f()
+    tb.connect((tb.blocks_throttle, 0), (rms, 0))
+    tb.connect((rms, 0), (probe, 0))
+    tb._probe_blocks = [rms, probe]
+
+    def loop():
+        while not stop_evt.is_set():
+            stop_evt.wait(5)
+            try:
+                print(f"[LUNAR] gNB DL signal RMS = {probe.level():.6f}", flush=True)
+            except Exception:
+                pass
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def add_noise_floor(tb, noise_amp, num_ues):
+    """Insert a Gaussian noise floor on each UE downlink, BEFORE the flowgraph
+    starts, so per-UE path-loss attenuation produces a real SNR rather than a
+    scale-invariant amplitude change the UE's AGC would undo. Rewires
+    pathloss_block -> ue_dl_sink into pathloss_block -> add_cc(+noise) ->
+    ue_dl_sink. References are kept on tb so the blocks are not garbage
+    collected."""
+    tb._noise_blocks = []
+    for ue in range(num_ues):
+        pl_blk = tb.blocks_multiply_const_dl_pathloss[ue]
+        sink = tb.ue_dl_sinks[ue]
+        noise = analog.noise_source_c(analog.GR_GAUSSIAN, noise_amp, ue + 1)
+        adder = blocks.add_cc()
+        tb.disconnect((pl_blk, 0), (sink, 0))
+        tb.connect((pl_blk, 0), (adder, 0))
+        tb.connect((noise, 0), (adder, 1))
+        tb.connect((adder, 0), (sink, 0))
+        tb._noise_blocks += [noise, adder]
+        print(f"[LUNAR] noise floor inserted on UE{ue+1} DL (amp={noise_amp})",
+              flush=True)
 
 
 def apply_pathloss(tb, pls_db):
@@ -113,6 +161,10 @@ def main():
         samp_rate=a.samp_rate, zmq_timeout=a.zmq_timeout, zmq_hwm=a.zmq_hwm)
 
     stop_evt = threading.Event()
+    measure_signal(tb, stop_evt)          # log gNB DL RMS for noise calibration
+    if a.noise_amp > 0:
+        add_noise_floor(tb, a.noise_amp, len(ue_addrs))
+
 
     def sig(*_):
         stop_evt.set(); tb.stop(); tb.wait(); sys.exit(0)
