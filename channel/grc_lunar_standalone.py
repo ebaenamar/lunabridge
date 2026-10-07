@@ -84,16 +84,29 @@ def attach_probe(tb, stop_evt):
     rms = blocks.rms_cf(0.0001); probe = blocks.probe_signal_f()
     tb.connect((tb.blocks_throttle, 0), (rms, 0)); tb.connect((rms, 0), (probe, 0))
     tb._probe = (rms, probe)
+    import math
     def loop():
         while not stop_evt.is_set():
             stop_evt.wait(10)
-            try: print(f"[LUNAR] gNB DL RMS={probe.level():.5f} "
-                       f"(SNR@0dB~{-20*__import__('math').log10(tb.noise_voltage/max(probe.level(),1e-9)):.0f}dB)", flush=True)
-            except Exception: pass
+            try:
+                rms = float(probe.level())
+                if tb.noise_voltage > 0 and rms > 0:
+                    snr = 20 * math.log10(rms / tb.noise_voltage)
+                    print(f"[LUNAR] gNB DL RMS={rms:.5f} (SNR@0dB~{snr:.0f}dB)", flush=True)
+                else:
+                    print(f"[LUNAR] gNB DL RMS={rms:.5f} "
+                          f"(noise_voltage={tb.noise_voltage})", flush=True)
+            except Exception as e:
+                print(f"[LUNAR] probe err: {e}", flush=True)
     threading.Thread(target=loop, daemon=True).start()
 
 
-def player(tb, trace, speedup, loop, stop_evt):
+def player(tb, trace, speedup, loop, stop_evt, start_delay=0.0):
+    # hold the initial (LOS) channel so the UE can attach before the traverse
+    if start_delay > 0:
+        print(f"[LUNAR] holding initial channel {start_delay:.0f}s for UE attach",
+              flush=True)
+        stop_evt.wait(start_delay)
     while not stop_evt.is_set():
         t0 = time.monotonic(); base = trace[0]["t"]
         for snap in trace:
@@ -121,6 +134,8 @@ def parse_args():
     p.add_argument('--noise-voltage', type=float, default=0.0, help='AWGN std (noise floor)')
     p.add_argument('--pathloss-trace', default=None); p.add_argument('--trace-speedup', type=float, default=1.0)
     p.add_argument('--loop-trace', action='store_true'); p.add_argument('--probe', action='store_true')
+    p.add_argument('--trace-start-delay', type=float, default=0.0,
+                   help='hold initial channel this many seconds (UE attach)')
     a = p.parse_args()
     for f in ('ue_addrs', 'ue_tx_ports', 'ue_rx_ports', 'ue_pathloss'):
         setattr(a, f, sl(getattr(a, f), str if f == 'ue_addrs' else (int if 'port' in f else float)))
@@ -153,8 +168,8 @@ def main():
     print("[LUNAR] Starting flowgraph...", flush=True)
     tb.start()
     if trace:
-        threading.Thread(target=player, args=(tb, trace, a.trace_speedup, a.loop_trace, stop_evt),
-                         daemon=True).start()
+        threading.Thread(target=player, args=(tb, trace, a.trace_speedup, a.loop_trace,
+                         stop_evt, a.trace_start_delay), daemon=True).start()
         print(f"[LUNAR] driving pathloss from {a.pathloss_trace} ({len(trace)} snaps)", flush=True)
     tb.wait()
 

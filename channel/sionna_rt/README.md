@@ -73,3 +73,30 @@ the exact format `grc_lunar_standalone.py --pathloss-trace` consumes, so the SAM
 RT channel drives the live srsRAN broker (shadow -> explicit outage). On the lunar
 surface the delay spread is ns-scale (<< the NR CP), so a per-position path-gain
 (single-tap) channel is an accurate in-loop approximation.
+
+## Closing the real loop (live srsRAN)
+
+`deploy/grc_lunar_std_run.sh` runs `grc_lunar_standalone.py` as the live GRC
+broker, driven by env (`NOISE_VOLTAGE`, `TRACE_FILE`, `TRACE_SPEEDUP`,
+`TRACE_START_DELAY`, `PROBE`). Pipeline:
+
+```
+Sionna RT (real LOLA terrain)  ->  connecting_ridge.rel.pathloss.json
+   ->  grc_lunar_standalone.py (per-position tap + AWGN floor)  ->  live srsRAN
+   ->  UE DL SNR tracks the terrain  ->  N6 / DTN
+```
+
+Calibration: the broker `--probe` reports the gNB DL IQ RMS (measured 0.0555);
+`noise_voltage = RMS * 10^(-SNR0/20)` sets the LOS operating SNR (SNR0=25 dB ->
+noise_voltage 0.00312). The trace is applied RELATIVE to LOS (`pl - pl_min`) so
+the absolute path loss does not kill the baseband-IQ ZMQ link; RT outage positions
+carry an explicit outage flag (tap -> 1e-6). `--trace-start-delay` holds the
+initial LOS channel while the UE attaches, then plays the traverse.
+
+**Demonstrated (2026-10-07):** the standalone broker plays the real-terrain trace
+in the live loop, the UE attaches, DL throughput reaches **up to 22 Mbps in LOS**,
+and the link goes to **blackout/outage at the crater-rim cliff** (RT shadow),
+recovering when the looped traverse returns to LOS (`figs/closed_loop.png`). This
+is the full channel x traffic x DTN loop. Note: at `slowdown=2` a saturating flood
+can destabilise the link; a gentle sustained load (<~2 Mbps) gives the cleanest
+throughput-vs-time trace.
