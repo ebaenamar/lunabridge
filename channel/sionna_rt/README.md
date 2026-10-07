@@ -48,3 +48,28 @@ follows the real traverse and the cliffs fall at the real crater rims.
 - Swap synthetic ridge → LOLA DEM patch (Connecting Ridge).
 - Feed per-position CIR into a 5G-NR link-level chain → BLER / throughput vs
   traverse (the "access-realism" result, reproducibly, with no live stack).
+
+## Real LOLA terrain (Connecting Ridge)
+
+`export_lola_scene.py` (run in lunaremu's venv) builds the paper's Connecting
+Ridge scenario from the PGDA LOLA Site01 DEM and saves the clipped DEM + gNB/rover
+positions to `lola_scene.npz`. `lunar_rt_lola.py` then meshes a terrain patch
+around the gNB+rover corridor and ray-traces every rover position.
+
+```bash
+# 1) export geometry from lunaremu (its venv: rasterio/pyproj)
+python export_lola_scene.py /path/to/lunar-channel-emulation lola_scene.npz
+# 2) ray-trace the real terrain (Sionna venv)
+python lunar_rt_lola.py --scene lola_scene.npz --out figs
+```
+
+Result (`figs/lunar_rt_lola.png`): LOS 90->95 dB with terrain lobes to ~550 m,
+then a **hard coverage cliff into terrain shadow (RT outage)** — the real crater
+geometry, not a synthetic ridge. Replaces lunaremu's analytical Deygout/two-ray
+with full ray tracing.
+
+**Into the live stack:** the run also writes `connecting_ridge.pathloss.json` in
+the exact format `grc_lunar_standalone.py --pathloss-trace` consumes, so the SAME
+RT channel drives the live srsRAN broker (shadow -> explicit outage). On the lunar
+surface the delay spread is ns-scale (<< the NR CP), so a per-position path-gain
+(single-tap) channel is an accurate in-loop approximation.
