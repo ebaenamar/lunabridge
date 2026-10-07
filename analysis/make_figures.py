@@ -109,6 +109,44 @@ def fig_buffer_blackout(outdir: str) -> str:
     return pdf
 
 
+def fig_buffer_required(outdir: str) -> str:
+    """Column-width version: buffer needed to guarantee zero safety-of-life loss
+    vs blackout length, native BPv7 vs priority-aware admission, with the
+    CM4-class 256 MB reference (analytic: rate x gap)."""
+    gmax = real_max_gap()
+    a = analytical(MISSION_PROFILE, gmax)
+    total_rate, crit_rate = a["total_rate"], a["crit_rate"]
+    gaps = np.linspace(60, gmax, 200)
+    fig, ax = plt.subplots(figsize=(3.5, 2.3))
+    ax.plot(gaps / 3600, total_rate * gaps / GB, color="#c0392b", lw=2,
+            label="native BPv7 (whole backlog)")
+    ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32", lw=2,
+            label="priority-aware (critical only)")
+    ax.axhline(CM4_BUFFER / GB, ls="--", color="k", lw=0.9)
+    ax.text(0.05, CM4_BUFFER / GB * 1.15, "CM4-class 256 MB", fontsize=6.5)
+    ax.set_yscale("log")
+    ax.set_xlabel("blackout duration (h)")
+    ax.set_ylabel("buffer for zero\nsafety loss (GB)")
+    xg = gmax / 3600 * 0.985
+    ax.annotate("", xy=(xg, a["B_native"] / GB), xytext=(xg, a["B_critical"] / GB),
+                arrowprops=dict(arrowstyle="<->", lw=0.9, color="#333"))
+    ax.text(xg - 0.12, 0.9, f"{a['ratio']:.0f}$\\times$", fontsize=8,
+            ha="right", va="center", color="#333")
+    ax.axvline(gmax / 3600, ls=":", color="gray", lw=0.9)
+    ax.set_xlim(0, gmax / 3600 * 1.02)
+    ax.legend(fontsize=6.2, loc="lower right")
+    ax.grid(alpha=0.3, which="both")
+    fig.tight_layout()
+    os.makedirs(outdir, exist_ok=True)
+    pdf = os.path.join(outdir, "buffer_required.pdf")
+    fig.savefig(pdf, bbox_inches="tight")
+    fig.savefig(pdf.replace(".pdf", ".png"), dpi=170, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {pdf}: native={a['B_native']/GB:.2f} GB, "
+          f"priority-aware={a['B_critical']/MB:.0f} MB, ratio={a['ratio']:.0f}x")
+    return pdf
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default="figs")
