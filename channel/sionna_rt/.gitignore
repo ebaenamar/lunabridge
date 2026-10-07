@@ -1,0 +1,4 @@
+.venv/
+figs/terrain.ply
+figs/*.npz
+__pycache__/
