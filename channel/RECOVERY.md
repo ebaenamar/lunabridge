@@ -72,30 +72,68 @@ Health checks that should all pass (they did on 2026-10-07):
 - Links ESTABLISHED: broker→gNB:2000 reachable; gNB→broker:2001 `ESTAB` (check
   `/proc/net/tcp` on the broker for `:07D1` in state `01`).
 
-## OPEN BLOCKER (as of 2026-10-07)
+## ROOT CAUSE — SOLVED (2026-10-07)
 
-With **all** of the above verified healthy — correct node placement, JBPF IPC up,
-AMF connected, fresh endpoints, both cross-node ZMQ links ESTABLISHED, correct
-trigger order, and even a **single-UE** config to remove the UL-adder dependency —
-the UE still hangs at `Attaching UE...`, the gNB logs **no PRACH/RNTI**, and the
-UEs eventually time out and CrashLoopBackOff (srsUE exits 1 on RF ZMQ timeout).
+The "deadlock" was **the trigger mechanism, not the radio.** The gNB, broker and
+UE pods each gate on an **init container** that waits for its trigger file on the
+hostpath (`grc-wait-for-zmq-grc-trigger`, `ue-wait-for-zmq-connections-trigger`).
+From a clean (scaled-to-0) bring-up, the **main `grc` container has not started
+yet** — it is blocked in init waiting for `zmq-trigger-grc`. So firing triggers
+with `kubectl exec srs-grc-du1-0 -c grc -- touch /zmq-triggers/...` **silently
+fails**: you cannot exec into a container that is still in init. The flowgraph
+never starts, nothing clocks, and the symptom looks exactly like a ZMQ stall
+(broker idle at 0.5 % CPU, 0 IQ packets, all TCP ESTABLISHED).
 
-This reproduces with the **stock** `GRC_run.sh` broker, so it is **not** a
-`grc_lunar_standalone.py` bug — it is a sample-flow stall in the live ZMQ radio
-loop that appeared after many restart cycles (the same stack previously carried
-the 81,662-bundle capture that is in the paper). Connections are up but DL IQ is
-not clocking end-to-end.
+**Fix: touch the trigger files on the node hostpath, like the canonical
+`zmq_helpers.sh` does** — NOT via `kubectl exec`:
 
-Hypotheses not yet eliminated (next session):
-1. `gr::vmcircbuf ... createfilemapping is not available` with only **64 MB**
-   `/dev/shm` on the broker pod — try raising the broker's `/dev/shm` (emptyDir
-   `medium: Memory` sizeLimit) and re-test; large DL buffers may be failing to
-   allocate.
-2. srsUE RF ZMQ `zmq_timeout` too tight for the cross-node round trip under load
-   — the flowgraph connects but a slow slot trips the UE's RF timeout before
-   first SSB decode. Try a larger timeout / `slowdown`.
-3. A stale AMF/core (Open5GS docker `jrtc_open5gs`) session state — full core
-   bounce before the RAN restart.
+```bash
+# on the rack2 host (where the broker + UE pods run):
+sudo touch /var/tmp/zmq-triggers/zmq-trigger-grc          # broker init -> main starts flowgraph
+#   wait for broker log "Starting flowgraph" and CPU to ramp (0.5% -> ~5%+)
+sudo touch /var/tmp/zmq-triggers/zmq-trigger-connections  # UE init -> main starts, attaches
+#   wait for UE "PDU Session Establishment successful"
+sudo touch /var/tmp/zmq-triggers/zmq-trigger-traffic
+```
+
+### Verified-good coordinated cold reset (no Helm chart needed)
+
+The OCI chart pull from ghcr returns **403** right now, so `uninstall.sh` +
+`install.sh` is NOT a safe recovery (reinstall would fail). Use a scale-based
+cold reset instead:
+
+```bash
+K(){ sudo k3s kubectl -n ran "$@"; }
+# gNB must be on the jrtc node
+K patch sts srs-gnb-du1 --type=merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"jrtc-role":"ran"}}}}}'
+K scale sts srs-gnb-du1 srs-grc-du1 srs-ue1-du1 srs-ue2-du1 --replicas=0   # all down together
+#   wait until 0 radio pods remain
+sudo rm -f /var/tmp/zmq-triggers/*            # on rack2 host
+K scale sts srs-gnb-du1 --replicas=1          # gNB first (needs jrtc)
+#   wait for "N2: Connection to AMF ... completed" + "gNB started"
+K scale sts srs-grc-du1 srs-ue1-du1 srs-ue2-du1 --replicas=1   # broker + UEs together
+#   wait Running (they will sit in init, waiting for triggers)
+# then fire the three triggers on the rack2 hostpath (above), in order.
+```
+
+**Confirmed working 2026-10-07:** both UEs attach (UE1 `10.45.0.2`, UE2
+`10.45.0.3`), gNB shows the connected-UE metrics row, and UE→core ping is
+**0 % loss** (~109 ms RTT, consistent with `slowdown=2`). Broker CPU ramps
+0.5 %→~5 % the instant the host-side `zmq-trigger-grc` lands — the signal that the
+flowgraph is actually pulling IQ.
+
+Note: `gr::vmcircbuf ... createfilemapping is not available` is **benign** (the
+Windows buffer method, always absent on Linux; GNU Radio falls back). The 64 MB
+`/dev/shm` was NOT the issue. Node placement (gNB on `jrtc-role: ran`) still
+matters — see Topology above.
+
+### N6 capture note
+
+Pinging the gateway IP `10.45.0.1` (which is ogstun's own address) is answered by
+the UPF slow path and does **not** show up on `tcpdump -ni ogstun`. To re-capture
+at N6 for the DTN, generate traffic to a **data-network destination beyond the
+gateway** (MGEN, as in the original 81,662-bundle run) and capture via `nsenter`
+into the UPF netns.
 
 ## Running the lunar channel in the loop (once the stack attaches)
 
