@@ -64,9 +64,18 @@ def build_terrain_ply(path, **kw):
 
 
 # --------------------------------------------------------------------------- #
-def regolith_material(freq_hz, eps_r=3.0, loss_tangent=0.008):
-    """Apollo-class lunar regolith: eps_r ~ 2.7-3.0, loss tangent ~ 0.005-0.01.
-    conductivity sigma = 2*pi*f * eps0 * eps_r * tan(delta)."""
+def regolith_material(freq_hz, eps_r=None, loss_tangent=None, rho=1.5):
+    """Lunar regolith dielectric, IDENTICAL model to the companion lunaremu
+    physics (so the RT channel and the analytical channel share inputs):
+      - real permittivity  eps' = 1.919**rho       (density law; rho=1.5 -> 2.658)
+      - loss tangent        tan d = 10**(0.312*rho + f_GHz**0.069 - 3.79)
+                                                    (Siegler et al. 2020, S-band ~0.0055)
+      - conductivity        sigma = 2*pi*f * eps0 * eps' * tan d
+    Pass eps_r/loss_tangent to override."""
+    if eps_r is None:
+        eps_r = 1.919 ** rho
+    if loss_tangent is None:
+        loss_tangent = 10 ** (0.312 * rho + (freq_hz / 1e9) ** 0.069 - 3.79)
     eps0 = 8.8541878128e-12
     sigma = 2 * np.pi * freq_hz * eps0 * eps_r * loss_tangent
     return RadioMaterial(name="regolith", relative_permittivity=eps_r,
