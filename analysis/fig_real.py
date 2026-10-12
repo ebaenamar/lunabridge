@@ -1,12 +1,20 @@
 """
 analysis/fig_real.py
 
-Per-class delivery under FIFO / strict-priority / WFQ on the REAL srsRAN N6
-trace (runs/real_srsran_long/bundles.jsonl -- 12,734 bundles captured over 15
-min from real class-marked UE traffic through the live srsRAN+Open5GS stack,
-classified at the N6/ogstun interface). A congested contact plan over the
-capture span forces contention so the policies separate. This is the real-data
-counterpart to fig_policy (no DES-synthetic trace).
+Per-class delivery under FIFO / strict-priority / WFQ (work-conserving DRR)
+when the gateway scheduler is replayed over the REAL N6 trace:
+runs/real_srsran_clean/bundles.jsonl -- 81,662 bundle records, 1,200 s,
+captured at ogstun (UPF, N6) on the live srsRAN gNB + srsUE (ZMQ, ideal
+channel) + Open5GS stack while one UE sent four DSCP-marked ICMP flows
+(traffic_gen/n6_icmp_experiment.sh; raw pcap in runs/real_srsran_capture/),
+converted with traffic_gen/n6_text_to_trace.py (each packet classified from
+its DSCP; per-bundle lifetimes from CLASS_SPECS at capture time: 23,627 /
+47,254 / 165,389 / 11,813 s).
+
+Defaults reproduce the paper figure: a congested test plan of nine 8 s
+contacts at 10 Mb/s every 150 s (a congestion test, not the LCRNS plan; the last contact opens at
+1,200 s, after the final arrival, so no bundle is cut off by the end of the
+plan), 720 Mbit of capacity against 893 Mbit offered, and a 30 MB buffer.
 """
 from __future__ import annotations
 import argparse, os, sys, copy
@@ -35,13 +43,13 @@ def ddr(records):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", default="runs/real_srsran_long")
+    ap.add_argument("--run", default="runs/real_srsran_clean")
     ap.add_argument("--outdir", default="figs")
-    ap.add_argument("--queue-bytes", type=float, default=500_000)
-    ap.add_argument("--win-rate", type=float, default=500_000)
-    ap.add_argument("--win-dur", type=float, default=25.0)
+    ap.add_argument("--queue-bytes", type=float, default=30_000_000)
+    ap.add_argument("--win-rate", type=float, default=10_000_000)
+    ap.add_argument("--win-dur", type=float, default=8.0)
     ap.add_argument("--win-period", type=float, default=150.0)
-    ap.add_argument("--win-count", type=int, default=6)
+    ap.add_argument("--win-count", type=int, default=9)
     a = ap.parse_args()
 
     bundles = read_bundles(a.run)

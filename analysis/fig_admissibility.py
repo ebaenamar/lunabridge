@@ -33,12 +33,15 @@ RATE = {
 }
 
 
-def load_plan():
+def load_plan(rate_bps=None):
+    """Real LCRNS 1-SV windows. rate_bps overrides the CSV link rate (the CSV
+    carries the Ka forward rate, 10 Mb/s; surface->Earth traffic uses the
+    return rate, 50 Mb/s, per the same LCRNS SRD the plan generator cites)."""
     W = []
     rows = list(csv.DictReader(open(CSV)))
     for i, r in enumerate(rows):
         W.append(ContactWindow(f"c{i}", float(r["start_sec"]), float(r["end_sec"]),
-                               float(r["rate_bps"])))
+                               float(rate_bps if rate_bps else r["rate_bps"])))
     return ContactPlan(W), rows
 
 
@@ -146,9 +149,8 @@ def fig_videosweep(outdir, dt):
             rotation=90, fontsize=6.5, ha="right", va="bottom")
     ax.axhline(1.0, ls="--", color="k", lw=0.6)
     ax.set_xscale("log"); ax.set_xlabel("bundle lifetime TTL (h)")
-    ax.set_ylabel("video delivery ratio"); ax.set_ylim(0, 1.05)
-    ax.set_title(f"Admissible video rate ($C_{{bh,eff}}\\approx{bh:.1f}$ Mbps)", fontsize=9)
-    ax.legend(fontsize=6.3, loc="center right", title="video feed", title_fontsize=6.5)
+    ax.set_ylabel("delivery ratio"); ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=6.3, loc="lower right", title=f"offered rate ($C_{{bh,eff}}$={bh:.1f} Mb/s)", title_fontsize=6.3)
     ax.grid(alpha=0.3, which="both")
     fig.tight_layout(); os.makedirs(outdir, exist_ok=True)
     p = os.path.join(outdir, "admissibility.pdf")
@@ -166,31 +168,31 @@ def closed_form_P(plan, st, L, rate_bps):
     return min(p_gap, st['avg_bh_bps'] / rate_bps)
 
 
-def fig_videosweep_closed(outdir, dt, check=True):
-    plan, rows = load_plan(); st = plan_stats(plan, rows)
+def fig_videosweep_closed(outdir, dt, check=True, rate_bps=50e6,
+                          mbps_list=(10, 20, 30, 40, 50, 60)):
+    plan, rows = load_plan(rate_bps); st = plan_stats(plan, rows)
     bh = st['avg_bh_bps'] / 1e6
     ttls = np.geomspace(5 * 60, 10 * 86400, 60)
-    mbps_list = [2, 4, 6, 8, 10, 12]
+    mbps_list = list(mbps_list)
     cmap = plt.cm.viridis(np.linspace(0, 0.9, len(mbps_list)))
     if check:   # closed form vs the gateway scheduler, all three regimes
-        for mbps, L in [(4, 3600), (4, 3 * 86400), (12, 3600), (12, 3 * 86400), (10, 2 * 3600)]:
+        for mbps, L in [(20, 3600), (20, 3 * 86400), (60, 3600), (60, 3 * 86400), (50, 2 * 3600)]:
             r = mbps * 1e6 / 8.0
             sim = run_class(plan, TrafficClass.MEDIA, float(L), st['span'], dt, rate_override=r)[0]
             cf = closed_form_P(plan, st, L, mbps * 1e6)
             print(f"  check {mbps:2d} Mbps L={L/3600:5.1f} h: closed={cf:.3f} scheduler={sim:.3f} |d|={abs(cf-sim):.3f}")
-    fig, ax = plt.subplots(figsize=(4.8, 3.1))
+    fig, ax = plt.subplots(figsize=(3.5, 2.4))
     for mbps, col in zip(mbps_list, cmap):
         ys = [closed_form_P(plan, st, L, mbps * 1e6) for L in ttls]
         adm = "" if mbps <= bh else "  (inadmissible)"
-        ax.plot(ttls / 3600, ys, color=col, lw=1.7, label=f"{mbps} Mbps{adm}")
+        ax.plot(ttls / 3600, ys, color=col, lw=1.7, label=f"{mbps} Mb/s{adm}")
     ax.axvline(st['gmax'] / 3600, ls=":", color="gray", lw=1)
     ax.text(st['gmax'] / 3600, 0.03, f"$G_{{\\max}}$={st['gmax']/3600:.1f}h",
             rotation=90, fontsize=6.5, ha="right", va="bottom")
     ax.axhline(1.0, ls="--", color="k", lw=0.6)
     ax.set_xscale("log"); ax.set_xlabel("bundle lifetime $L$ (h)")
-    ax.set_ylabel("video delivery ratio"); ax.set_ylim(0, 1.05)
-    ax.set_title(f"Admissible video rate ($C_{{bh,eff}}\\approx{bh:.1f}$ Mbps)", fontsize=9)
-    ax.legend(fontsize=6.3, loc="center right", title="video feed", title_fontsize=6.5)
+    ax.set_ylabel("delivery ratio"); ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=6.3, loc="lower right", title=f"offered rate ($C_{{bh,eff}}$={bh:.1f} Mb/s)", title_fontsize=6.3)
     ax.grid(alpha=0.3, which="both")
     fig.tight_layout(); os.makedirs(outdir, exist_ok=True)
     p = os.path.join(outdir, "admissibility.pdf")
@@ -201,12 +203,14 @@ def fig_videosweep_closed(outdir, dt, check=True):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--closed", action="store_true", help="closed-form admissibility figure")
+    ap.add_argument("--rate-bps", type=float, default=50e6,
+                    help="relay link rate for --closed (default: LCRNS Ka return 50 Mb/s)")
     ap.add_argument("--outdir", default="figs")
     ap.add_argument("--dt", type=float, default=300.0, help="bundle granularity (s)")
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--sweep", action="store_true", help="video-bitrate sweep (central fig)")
     a = ap.parse_args()
-    if a.closed: fig_videosweep_closed(a.outdir, a.dt)
+    if a.closed: fig_videosweep_closed(a.outdir, a.dt, rate_bps=a.rate_bps)
     elif a.verify: verify(a.dt)
     elif a.sweep: fig_videosweep(a.outdir, a.dt)
     else: make_fig(a.outdir, a.dt)

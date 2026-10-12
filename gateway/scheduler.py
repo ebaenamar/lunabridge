@@ -547,12 +547,6 @@ class Scheduler:
                            reason="insufficient_budget",
                            contact_id=window.contact_id)
 
-        total_weight = sum(CLASS_SPECS[tc].queue_budget for tc in self._WFQ_CLASSES)
-        quanta = {
-            tc: remaining_bits * (CLASS_SPECS[tc].queue_budget / total_weight)
-            for tc in self._WFQ_CLASSES
-        }
-
         by_class: Dict[TrafficClass, List[BundleRecord]] = {
             tc: sorted([b for b in eligible if b.traffic_class is tc],
                        key=lambda b: b.ingress_ts)
@@ -563,57 +557,82 @@ class Scheduler:
         idx = self._rotation_index % n
         order = self._WFQ_CLASSES[idx:] + self._WFQ_CLASSES[:idx]
 
+        # Idle classes do not hoard deficit.
         for tc in order:
-            queue = by_class[tc]
-            if not queue:
+            if not by_class[tc]:
                 self._deficit[tc] = 0.0
-                continue
-            self._deficit[tc] += quanta[tc]
 
-            if not skip_over_deficit:
-                while queue:
-                    head = queue[0]
-                    bits_needed = head.size_bytes * 8
-                    if bits_needed <= self._deficit[tc] and bits_needed <= remaining_bits:
-                        queue.pop(0)
-                        self._deficit[tc] -= bits_needed
-                        remaining_bits -= bits_needed
-                        head.transmission_ts = window.start_ts
-                        head.contact_id = window.contact_id
-                        head.mark(TerminalState.DELIVERED, ts=window.start_ts)
-                        self._active_bytes -= head.size_bytes
-                        self._log(window.start_ts, head, action="transmit",
-                                   reason=f"wfq_{tc.value}",
-                                   contact_id=window.contact_id)
-                    else:
-                        reason = ("insufficient_deficit"
-                                   if bits_needed > self._deficit[tc]
-                                   else "insufficient_budget")
-                        self._log(window.start_ts, head, action="defer",
-                                   reason=reason, contact_id=window.contact_id)
-                        break
-            else:
-                still_queued = []
-                for b in queue:
-                    bits_needed = b.size_bytes * 8
-                    if bits_needed <= self._deficit[tc] and bits_needed <= remaining_bits:
-                        self._deficit[tc] -= bits_needed
-                        remaining_bits -= bits_needed
-                        b.transmission_ts = window.start_ts
-                        b.contact_id = window.contact_id
-                        b.mark(TerminalState.DELIVERED, ts=window.start_ts)
-                        self._active_bytes -= b.size_bytes
-                        self._log(window.start_ts, b, action="transmit",
-                                   reason=f"wfq_skip_{tc.value}",
-                                   contact_id=window.contact_id)
-                    else:
-                        still_queued.append(b)
-                        reason = ("insufficient_deficit"
-                                   if bits_needed > self._deficit[tc]
-                                   else "insufficient_budget")
-                        self._log(window.start_ts, b, action="defer",
-                                   reason=reason, contact_id=window.contact_id)
-                by_class[tc] = still_queued
+        # Work-conserving DRR (Shreedhar & Varghese 1996): rounds repeat within
+        # the window while some backlogged class can still use the remaining
+        # budget. Each round shares the remaining budget among the classes that
+        # are still backlogged, in proportion to their queue_budget weights, so
+        # weighted fairness holds while all classes are backlogged and no
+        # capacity is left idle when some are not. A head-of-line bundle that
+        # exceeds its class's deficit keeps accumulating deficit (within the
+        # window and across windows) until it fits.
+        rnd = 0
+        while remaining_bits > 0:
+            backlogged = [tc for tc in order if by_class[tc]]
+            if not any(by_class[tc][0].size_bytes * 8 <= remaining_bits
+                       for tc in backlogged):
+                break
+            w_total = sum(CLASS_SPECS[tc].queue_budget for tc in backlogged)
+            budget_this_round = remaining_bits
+            for tc in backlogged:
+                self._deficit[tc] += budget_this_round * (
+                    CLASS_SPECS[tc].queue_budget / w_total)
+                queue = by_class[tc]
+                if not skip_over_deficit:
+                    while queue:
+                        head = queue[0]
+                        bits_needed = head.size_bytes * 8
+                        if bits_needed <= self._deficit[tc] and bits_needed <= remaining_bits:
+                            queue.pop(0)
+                            self._deficit[tc] -= bits_needed
+                            remaining_bits -= bits_needed
+                            head.transmission_ts = window.start_ts
+                            head.contact_id = window.contact_id
+                            head.mark(TerminalState.DELIVERED, ts=window.start_ts)
+                            self._active_bytes -= head.size_bytes
+                            self._log(window.start_ts, head, action="transmit",
+                                       reason=f"wfq_{tc.value}",
+                                       contact_id=window.contact_id)
+                        else:
+                            if rnd == 0:
+                                reason = ("insufficient_deficit"
+                                           if bits_needed > self._deficit[tc]
+                                           else "insufficient_budget")
+                                self._log(window.start_ts, head, action="defer",
+                                           reason=reason, contact_id=window.contact_id)
+                            break
+                else:
+                    still_queued = []
+                    for b in queue:
+                        bits_needed = b.size_bytes * 8
+                        if bits_needed <= self._deficit[tc] and bits_needed <= remaining_bits:
+                            self._deficit[tc] -= bits_needed
+                            remaining_bits -= bits_needed
+                            b.transmission_ts = window.start_ts
+                            b.contact_id = window.contact_id
+                            b.mark(TerminalState.DELIVERED, ts=window.start_ts)
+                            self._active_bytes -= b.size_bytes
+                            self._log(window.start_ts, b, action="transmit",
+                                       reason=f"wfq_skip_{tc.value}",
+                                       contact_id=window.contact_id)
+                        else:
+                            still_queued.append(b)
+                            if rnd == 0:
+                                reason = ("insufficient_deficit"
+                                           if bits_needed > self._deficit[tc]
+                                           else "insufficient_budget")
+                                self._log(window.start_ts, b, action="defer",
+                                           reason=reason, contact_id=window.contact_id)
+                    by_class[tc] = still_queued
+                if not by_class[tc]:
+                    self._deficit[tc] = 0.0     # emptied: no hoarding
+            rnd += 1
+            if rnd > 10000:                     # defensive bound
+                break
 
         self._rotation_index = (self._rotation_index + 1) % n
 

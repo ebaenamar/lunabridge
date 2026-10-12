@@ -347,30 +347,54 @@ class TestSchedulingPolicies(unittest.TestCase):
         self.assertIn("wfq_media", transmit_decisions["media-1"].reason)
 
     def test_wfq_deficit_carries_over_across_windows(self):
-        """A SCIENCE_BULK bundle too big for one window's quantum share
-        still gets sent once TWO windows' worth of quantum has
-        accumulated -- proving deficit carryover, not permanent
-        skip-over."""
+        """Under contention, a SCIENCE_BULK bundle larger than its weighted
+        share of window w0 is deferred (TELEMETRY, weight 10, uses w0's
+        budget) and is sent in w1 once its deficit has accumulated --
+        deficit carryover, not permanent skip-over."""
+        plan = ContactPlan([
+            ContactWindow(contact_id="w0", start_ts=0.0, end_ts=100.0, link_rate_bps=200.0),
+            ContactWindow(contact_id="w1", start_ts=200.0, end_ts=300.0, link_rate_bps=200.0),
+        ])
+        sched = Scheduler(plan, max_queue_bytes=1_000_000,
+                           policy=SchedulingPolicy.WFQ)
+        # w0 budget 20,000 bits; TELEMETRY backlog of 10 x 2,000 bits fills it
+        telemetry = []
+        for i in range(10):
+            b = BundleRecord(f"tel-{i}", "f1", TrafficClass.TELEMETRY,
+                             size_bytes=250, ingress_ts=0.0)
+            b.set_ttl(); telemetry.append(b)
+        sci_bulk = BundleRecord("sci-1", "f2", TrafficClass.SCIENCE_BULK,
+                                 size_bytes=1500, ingress_ts=0.0)   # 12,000 bits
+        sci_bulk.set_ttl()
+
+        sched.run(telemetry + [sci_bulk])
+
+        self.assertTrue(all(b.terminal_state is TerminalState.DELIVERED for b in telemetry))
+        self.assertTrue(all(b.contact_id == "w0" for b in telemetry))
+        self.assertEqual(sci_bulk.terminal_state, TerminalState.DELIVERED)
+        self.assertEqual(sci_bulk.contact_id, "w1")
+        sci_decisions = [d for d in sched.decisions if d.bundle_id == "sci-1"]
+        self.assertEqual(sci_decisions[0].action, "defer")
+        self.assertEqual(sci_decisions[0].reason, "insufficient_deficit")
+        self.assertEqual(sci_decisions[-1].action, "transmit")
+
+    def test_wfq_is_work_conserving(self):
+        """Standard DRR is work-conserving: a class alone in a window gets the
+        whole link, even if its head bundle exceeds its first-round weighted
+        share. (The earlier single-round variant left the link idle and sent
+        this bundle a full contact later.)"""
         plan = ContactPlan([
             ContactWindow(contact_id="w0", start_ts=0.0, end_ts=100.0, link_rate_bps=800.0),
             ContactWindow(contact_id="w1", start_ts=200.0, end_ts=300.0, link_rate_bps=800.0),
         ])
         sched = Scheduler(plan, max_queue_bytes=1_000_000,
                            policy=SchedulingPolicy.WFQ)
-
         sci_bulk = BundleRecord("sci-1", "f1", TrafficClass.SCIENCE_BULK,
-                                 size_bytes=1500, ingress_ts=0.0)
+                                 size_bytes=1500, ingress_ts=0.0)   # 12,000 of 80,000 bits
         sci_bulk.set_ttl()
-
         sched.run([sci_bulk])
-
         self.assertEqual(sci_bulk.terminal_state, TerminalState.DELIVERED)
-        self.assertEqual(sci_bulk.contact_id, "w1")
-
-        sci_decisions = [d for d in sched.decisions if d.bundle_id == "sci-1"]
-        self.assertEqual(sci_decisions[0].action, "defer")
-        self.assertEqual(sci_decisions[0].reason, "insufficient_deficit")
-        self.assertEqual(sci_decisions[1].action, "transmit")
+        self.assertEqual(sci_bulk.contact_id, "w0")
 
     def test_deadline_aware_saves_at_risk_bundle_strict_priority_loses(self):
         """S2-W6-7. Proves DEADLINE_AWARE (true EDF) genuinely differs from

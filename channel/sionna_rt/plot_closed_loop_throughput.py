@@ -1,89 +1,130 @@
 #!/usr/bin/env python3
-import re
+# SPDX-License-Identifier: GPL-3.0
+"""
+channel/sionna_rt/plot_closed_loop_throughput.py
+
+Closed-loop figure: a Sionna-RT lunar access-channel trace (LunaTwin-aligned,
+real Connecting Ridge LOLA terrain) drives the live srsRAN downlink, and we
+plot what the stack actually delivered. Only measured values are drawn:
+
+  * delivered ICMP echo round trips per second, from a timestamped flood
+    (`ping -D -O -i 0.01 -s 1200`) sent from the core to the UE; a second with
+    no reply is a measured zero (the ping log records every unanswered request);
+  * (gNB MAC metrics are parsed and summarized on stdout only: their absolute
+    bit rate is not interpretable as UE goodput, so they are not plotted);
+  * the channel state (LOS / RT outage) from the broker's trace log;
+  * UE attach (PDU session) and release events from the UE log.
+
+Inputs come from data/closedloop_v2/ (captured by its capture.sh).
+
+Usage: python plot_closed_loop_throughput.py --dir data/closedloop_v2 \
+           --out figs/closed_loop_final
+"""
+import argparse, re
 from datetime import datetime
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-SP = "/private/tmp/claude-502/-Users-e-baena/098255c9-16a6-46c0-9596-1798761a9535/scratchpad"
-OUT = "/Users/e.baena/CascadeProjects/lunabridge/channel/sionna_rt/figs/closed_loop_final"
 
-def wt(line):
-    m = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)", line)
-    return datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp() + float("0."+m.group(2))
+def k8s_ts(line):
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?([+-]\d\d:\d\d|Z)", line)
+    if not m:
+        return None
+    frac = (m.group(2) or ".0")[:7]
+    tz = m.group(3).replace("Z", "+00:00")
+    return datetime.fromisoformat(m.group(1) + frac + tz).timestamp()
 
-def brate_mbps(tok):
-    tok = tok.strip()
-    if tok.endswith("M"): return float(tok[:-1])
-    if tok.endswith("k"): return float(tok[:-1])/1000.0
-    try: return float(tok)/1e6
-    except: return None
 
-# gNB brate
-gt, gb = [], []
-for ln in open(SP+"/gnb_final.txt"):
-    p = ln.split()
-    try: i = p.index("100")
-    except ValueError: continue
-    v = brate_mbps(p[i+6])
-    if v is None: continue
-    gt.append(wt(ln)); gb.append(v)
-gt = np.array(gt); gb = np.array(gb)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", default="data/closedloop_v2")
+    ap.add_argument("--out", default="figs/closed_loop_final")
+    ap.add_argument("--bin", type=float, default=1.0, help="ping bin width (s)")
+    a = ap.parse_args()
+    d = a.dir.rstrip("/") + "/"
 
-# trace outage transitions
-tt, to = [], []
-for ln in open(SP+"/trace_final.txt"):
-    m = re.search(r"outage=\[?([01])", ln)
-    if not m: continue
-    tt.append(wt(ln)); to.append(int(m.group(1)))
-tt = np.array(tt); to = np.array(to)
+    # channel trace steps (broker)
+    steps = []
+    for l in open(d + "grc.log"):
+        m = re.search(r"t=(\d+)s pl_db=\[([\d.]+)\] outage=\[([01])\]", l)
+        if m:
+            steps.append((k8s_ts(l), int(m.group(3))))
+    t0 = steps[0][0]                       # traverse starts (end of LOS hold)
+    spans, s = [], None
+    for t, o in steps:
+        if o and s is None: s = t
+        if not o and s is not None: spans.append((s - t0, t - t0)); s = None
+    if s is not None: spans.append((s - t0, None))
 
-t0 = gt.min()
-gt -= t0; tt -= t0
-# window to one clean LOS->cliff->outage->recovery cycle
-W0, W1 = 30, 430
-mg = (gt >= W0) & (gt <= W1); gt, gb = gt[mg], gb[mg]
-mt = (tt >= W0) & (tt <= W1); tt, to = tt[mt], to[mt]
+    # ping: replies per bin (measured; empty bins are zero replies)
+    rep = np.array([float(m.group(1)) for l in open(d + "ping.log")
+                    for m in [re.match(r"\[(\d+\.\d+)\] \d+ bytes from", l)] if m])
+    sent = np.array([float(m.group(1)) for l in open(d + "ping.log")
+                     for m in [re.match(r"\[(\d+\.\d+)\] (\d+ bytes from|no answer yet)", l)] if m])
+    t_end = sent.max() - t0
+    edges = np.arange(0, t_end + a.bin, a.bin)
+    hist, _ = np.histogram(rep - t0, bins=edges)
+    rate = hist / a.bin
+    first_send = sent.min() - t0
 
-# outage intervals
-spans, s = [], None
-for i in range(len(tt)):
-    if to[i] == 1 and s is None: s = tt[i]
-    if to[i] == 0 and s is not None: spans.append((s, tt[i])); s = None
-if s is not None: spans.append((s, tt.max()))
+    # gNB DL MAC bitrate samples for the UE
+    gt, gb = [], []
+    for l in open(d + "gnb.log"):
+        p = l.split()
+        if "|" not in l or len(p) < 8:
+            continue
+        try:
+            i = p.index("|") if p.count("|") else None
+        except ValueError:
+            i = None
+        m = re.search(r"\s(\d+)\s+(\d+)\s+\|\s+\S+\s+\S+\s+(\d+)\s+(\S+)", l)
+        if not m:
+            continue
+        br = m.group(4)
+        mult = 1e-6 if br[-1].isdigit() else {"k": 1e-3, "M": 1.0}.get(br[-1], None)
+        if mult is None:
+            continue
+        val = float(br.rstrip("kM")) * mult
+        t = k8s_ts(l)
+        if t:
+            gt.append(t - t0); gb.append(val)
 
-# force throughput to 0 inside outage spans (link down); insert 0 at edges so
-# the drop/recovery render as vertical cliffs, not diagonals across the gap
-gb_disp = gb.copy()
-for (s, e) in spans:
-    gb_disp[(gt >= s) & (gt <= e)] = 0.0
-edges_t, edges_v = [], []
-for (s, e) in spans:
-    edges_t += [s - 0.1, s + 0.1, e - 0.1, e + 0.1]
-    edges_v += [np.interp(s - 0.1, gt, gb_disp), 0.0, 0.0,
-                np.interp(e + 0.1, gt, gb_disp)]
-gt = np.concatenate([gt, edges_t]); gb_disp = np.concatenate([gb_disp, edges_v])
-order = np.argsort(gt); gt, gb_disp = gt[order], gb_disp[order]
+    # UE events
+    attach = rel = None
+    for l in open(d + "ue.log"):
+        if "PDU Session Establishment successful" in l and attach is None:
+            attach = k8s_ts(l) - t0
+        if re.search(r"Scheduling request failed|releasing|Radio link failure", l, re.I) and rel is None:
+            rel = k8s_ts(l) - t0
 
-fig, ax = plt.subplots(figsize=(6.4, 3.4))
-for (s, e) in spans:
-    ax.axvspan(s, e, color="#2c3e50", alpha=0.12, zorder=0)
-ax.plot(gt, gb_disp, color="#c0392b", lw=1.8, marker="o", ms=3, zorder=3,
-        label="srsRAN UE DL throughput")
-if spans:
-    s0 = spans[0][0]
-    ax.axvline(s0, color="#2c3e50", ls=":", lw=1.3)
-    ax.text(s0+3, ax.get_ylim()[1]*0.92, "crater-rim cliff\n→ RT outage",
-            fontsize=7.5, color="#2c3e50", va="top")
-ax.text((gt.min()+ (spans[0][0] if spans else gt.max()))/2, 4.9,
-        "LOS traverse\n~4.5 Mbps steady", fontsize=7.5, color="#c0392b", ha="center")
-ax.set_xlabel("time (s)"); ax.set_ylabel("DL throughput (Mbps)")
-ax.set_title("Closed loop: Sionna-RT lunar channel (real LOLA) → live srsRAN throughput",
-             fontsize=8.8)
-ax.grid(alpha=0.3); ax.set_ylim(-0.3, 5.5)
-ax.legend(fontsize=7.5, loc="center right")
-fig.tight_layout()
-fig.savefig(OUT+".pdf", bbox_inches="tight"); fig.savefig(OUT+".png", dpi=150, bbox_inches="tight")
-print("wrote", OUT+".png")
-print(f"LOS throughput samples: {int(np.sum(gb_disp>1))} @ ~{np.median(gb[gb>1]):.1f} Mbps; "
-      f"outage spans: {len(spans)}")
+    fig, ax = plt.subplots(figsize=(3.5, 2.3))
+    for s0, s1 in spans:
+        ax.axvspan(s0, s1 if s1 is not None else t_end, color="#2c3e50", alpha=0.12, lw=0)
+    mask = edges[:-1] >= first_send
+    ax.step(edges[:-1][mask], rate[mask], where="post", color="#c0392b", lw=1.1,
+            label="ICMP echoes delivered / s")
+    ax.set_ylabel("echoes per second")
+    ax.set_xlabel("time since traverse start (s)")
+    ax.set_xlim(0, t_end); ax.set_ylim(-4, 105)
+    for x, lab in ((attach, "attach"), (rel, "UE release")):
+        if x is not None:
+            ax.axvline(x, color="#555", ls=":", lw=0.8)
+            ax.text(x + 3, 98, lab, fontsize=6, color="#555", va="top")
+    ax.legend(fontsize=5.8, loc="center right")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(a.out + ".pdf", bbox_inches="tight")
+    fig.savefig(a.out + ".png", dpi=170, bbox_inches="tight")
+    los = rate[(edges[:-1] > (attach or 0) + 2) & (edges[:-1] < spans[0][0])]
+    out = rate[(edges[:-1] > spans[0][0] + 5) & (edges[:-1] < (spans[0][1] or t_end))]
+    print(f"traverse start {datetime.utcfromtimestamp(t0):%H:%M:%S}Z; outage spans {spans}; "
+          f"attach {attach:.0f}s; release {rel}")
+    print(f"LOS echoes/s mean {los.mean():.1f} (of 100 sent/s); outage echoes/s mean "
+          f"{out.mean():.2f}, max {out.max():.0f}; gNB samples {len(gb)} "
+          f"(LOS median {np.median([b for t,b in zip(gt,gb) if t < spans[0][0]]) if gb else float('nan'):.2f} Mb/s)")
+    print("wrote", a.out + ".pdf")
+
+
+if __name__ == "__main__":
+    main()

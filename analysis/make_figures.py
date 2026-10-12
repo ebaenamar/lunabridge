@@ -123,7 +123,7 @@ def fig_buffer_required(outdir: str) -> str:
     ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32", lw=2,
             label="priority-aware (critical only)")
     ax.axhline(CM4_BUFFER / GB, ls="--", color="k", lw=0.9)
-    ax.text(0.05, CM4_BUFFER / GB * 1.15, "CM4-class 256 MB", fontsize=6.5)
+    ax.text(0.05, CM4_BUFFER / GB * 1.15, "256 MB store (assumed)", fontsize=6.5)
     ax.set_yscale("log")
     ax.set_xlabel("blackout duration (h)")
     ax.set_ylabel("buffer for zero\nsafety loss (GB)")
@@ -151,8 +151,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default="figs")
     args = ap.parse_args()
-    pdf = fig_buffer_blackout(args.outdir)
-    print(f"wrote {pdf}")
+    print(f"wrote {fig_buffer_required(args.outdir)}")   # paper figure (buffer_required)
+    print(f"wrote {fig_buffer_blackout(args.outdir)}")   # earlier two-panel variant
 
 
 if __name__ == "__main__":

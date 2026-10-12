@@ -7,11 +7,11 @@ computed over a PGDA LOLA 5 m/px south-pole DEM) and plots per-UE path loss,
 showing the static LOS link, the diffraction-served fringe link, and the rover
 driving from line of sight into terrain shadow (the coverage "cliff").
 
-This characterizes the surface-5G island access link. NOTE: the measured N6
-traffic trace in this paper was captured over the (ideal) srsRAN ZMQ access;
-driving this real channel into the live loop (grc_lunar + a calibrated noise
-floor) is the access-realism step reported as future work -- this figure is the
-channel itself, not traffic over it.
+This characterizes the surface-5G island access link with the lunaremu
+ANALYTIC model (two-ray + Deygout / ITU-R P.526, Siegler regolith). Input data
+are versioned in channel/data/connecting_ridge_4node/ (see PROVENANCE.md). The
+live closed loop uses a separate Sionna-RT trace of the same site
+(channel/sionna_rt/).
 
 Usage: python -m analysis.fig_channel --csv <expected_links.csv> --out figs
 """
