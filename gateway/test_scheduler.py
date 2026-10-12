@@ -396,6 +396,36 @@ class TestSchedulingPolicies(unittest.TestCase):
         self.assertEqual(sci_bulk.terminal_state, TerminalState.DELIVERED)
         self.assertEqual(sci_bulk.contact_id, "w0")
 
+    def test_wfq_fills_contact_like_strict_priority(self):
+        """Work conservation under contention: when the backlog exceeds the
+        contact, WFQ may pick DIFFERENT bundles than strict priority, but it
+        must send the same number of bits -- the link never idles while any
+        class still has a bundle that fits."""
+        def backlog():
+            out = []
+            for cls, n in [(TrafficClass.TELEMETRY, 20),
+                           (TrafficClass.SCIENCE_BULK, 20),
+                           (TrafficClass.MEDIA, 20)]:
+                for i in range(n):
+                    b = BundleRecord(f"{cls.value}-{i}", cls.value, cls,
+                                     size_bytes=100, ingress_ts=0.0)
+                    b.set_ttl(); out.append(b)
+            return out
+        plan = ContactPlan([   # 24,000 bits = 30 of the 60 bundles
+            ContactWindow(contact_id="w0", start_ts=0.0, end_ts=100.0, link_rate_bps=240.0),
+        ])
+        sent = {}
+        for pol in (SchedulingPolicy.STRICT_PRIORITY, SchedulingPolicy.WFQ):
+            recs = backlog()
+            Scheduler(plan, max_queue_bytes=1_000_000, policy=pol).run(recs)
+            sent[pol] = [b for b in recs if b.terminal_state is TerminalState.DELIVERED]
+        self.assertEqual(len(sent[SchedulingPolicy.STRICT_PRIORITY]), 30)
+        self.assertEqual(len(sent[SchedulingPolicy.WFQ]), 30)
+        # strict sends all 20 TELEMETRY + 10 SCIENCE_BULK, no MEDIA; WFQ shares
+        wfq_media = [b for b in sent[SchedulingPolicy.WFQ]
+                     if b.traffic_class is TrafficClass.MEDIA]
+        self.assertGreater(len(wfq_media), 0)
+
     def test_deadline_aware_saves_at_risk_bundle_strict_priority_loses(self):
         """S2-W6-7. Proves DEADLINE_AWARE (true EDF) genuinely differs from
         STRICT_PRIORITY, not just a different label on the same behavior.

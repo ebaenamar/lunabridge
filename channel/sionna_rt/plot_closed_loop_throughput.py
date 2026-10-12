@@ -20,11 +20,14 @@ Inputs come from data/closedloop_v2/ (captured by its capture.sh).
 Usage: python plot_closed_loop_throughput.py --dir data/closedloop_v2 \
            --out figs/closed_loop_final
 """
-import argparse, re
+import argparse, os, re, sys
 from datetime import datetime
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from analysis.paperstyle import apply as apply_style, COL_W  # noqa: E402
+apply_style()
 
 
 def k8s_ts(line):
@@ -98,21 +101,21 @@ def main():
         if re.search(r"Scheduling request failed|releasing|Radio link failure", l, re.I) and rel is None:
             rel = k8s_ts(l) - t0
 
-    fig, ax = plt.subplots(figsize=(3.5, 2.3))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.8))
     for s0, s1 in spans:
         ax.axvspan(s0, s1 if s1 is not None else t_end, color="#2c3e50", alpha=0.12, lw=0)
+    s0, s1 = spans[0]
+    ax.text((s0 + (s1 or t_end)) / 2, 50, "ray-traced\noutage", ha="center",
+            va="center", color="#2c3e50", fontsize=7)
     mask = edges[:-1] >= first_send
-    ax.step(edges[:-1][mask], rate[mask], where="post", color="#c0392b", lw=1.1,
-            label="ICMP echoes delivered / s")
-    ax.set_ylabel("echoes per second")
+    ax.step(edges[:-1][mask], rate[mask], where="post", color="#c0392b", lw=1.0)
+    ax.set_ylabel("ICMP replies per second")
     ax.set_xlabel("time since traverse start (s)")
-    ax.set_xlim(0, t_end); ax.set_ylim(-4, 105)
+    ax.set_xlim(0, t_end); ax.set_ylim(-4, 112)
     for x, lab in ((attach, "attach"), (rel, "UE release")):
         if x is not None:
-            ax.axvline(x, color="#555", ls=":", lw=0.8)
-            ax.text(x + 3, 98, lab, fontsize=6, color="#555", va="top")
-    ax.legend(fontsize=5.8, loc="center right")
-    ax.grid(alpha=0.25)
+            ax.axvline(x, color="#555", ls=":", lw=0.7)
+            ax.text(x + 4, 108, lab, ha="left", color="#555", va="top", fontsize=7)
     fig.tight_layout()
     fig.savefig(a.out + ".pdf", bbox_inches="tight")
     fig.savefig(a.out + ".png", dpi=170, bbox_inches="tight")

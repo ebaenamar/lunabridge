@@ -29,6 +29,8 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analysis.buffer_sizing import real_max_gap, MISSION_PROFILE, analytical  # noqa: E402
+from analysis.paperstyle import apply as apply_style, COL_W  # noqa: E402
+apply_style()
 
 MB = 1e6
 GB = 1e9
@@ -117,25 +119,27 @@ def fig_buffer_required(outdir: str) -> str:
     a = analytical(MISSION_PROFILE, gmax)
     total_rate, crit_rate = a["total_rate"], a["crit_rate"]
     gaps = np.linspace(60, gmax, 200)
-    fig, ax = plt.subplots(figsize=(3.5, 2.3))
-    ax.plot(gaps / 3600, total_rate * gaps / GB, color="#c0392b", lw=2,
+    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    ax.plot(gaps / 3600, total_rate * gaps / GB, color="#c0392b",
             label="native BPv7 (whole backlog)")
-    ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32", lw=2,
+    ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32",
             label="priority-aware (critical only)")
-    ax.axhline(CM4_BUFFER / GB, ls="--", color="k", lw=0.9)
-    ax.text(0.05, CM4_BUFFER / GB * 1.15, "256 MB store (assumed)", fontsize=6.5)
+    ax.axhline(CM4_BUFFER / GB, ls="--", color="k", lw=0.7)
+    ax.text(gmax / 3600 * 0.55, CM4_BUFFER / GB * 0.8, "256 MB store", va="top",
+            ha="center", fontsize=7)
     ax.set_yscale("log")
     ax.set_xlabel("blackout duration (h)")
-    ax.set_ylabel("buffer for zero\nsafety loss (GB)")
+    ax.set_ylabel("buffer for zero safety loss (GB)")
     xg = gmax / 3600 * 0.985
     ax.annotate("", xy=(xg, a["B_native"] / GB), xytext=(xg, a["B_critical"] / GB),
-                arrowprops=dict(arrowstyle="<->", lw=0.9, color="#333"))
-    ax.text(xg - 0.12, 0.9, f"{a['ratio']:.0f}$\\times$", fontsize=8,
-            ha="right", va="center", color="#333")
-    ax.axvline(gmax / 3600, ls=":", color="gray", lw=0.9)
+                arrowprops=dict(arrowstyle="<->", lw=0.8, color="#333"))
+    ax.text(xg - 0.1, 0.45, f"{a['ratio']:.0f}$\\times$", ha="right", va="center",
+            color="#333")
     ax.set_xlim(0, gmax / 3600 * 1.02)
-    ax.legend(fontsize=6.2, loc="lower right")
-    ax.grid(alpha=0.3, which="both")
+    ax.set_ylim(1e-4, 20)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2,
+              columnspacing=1.0, handlelength=1.4)
+    ax.grid(alpha=0.3, which="major")
     fig.tight_layout()
     os.makedirs(outdir, exist_ok=True)
     pdf = os.path.join(outdir, "buffer_required.pdf")

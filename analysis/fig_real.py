@@ -27,6 +27,8 @@ from gateway.contact_plan import ContactPlan, ContactWindow
 from gateway.scheduler import Scheduler, SchedulingPolicy
 from gateway.telemetry import read_bundles, TerminalState
 from gateway.traffic import TrafficClass
+from analysis.paperstyle import apply as apply_style, COL_W  # noqa: E402
+apply_style()
 
 CLASSES = [TrafficClass.EMERGENCY, TrafficClass.TELEMETRY,
            TrafficClass.SCIENCE_BULK, TrafficClass.MEDIA]
@@ -71,16 +73,19 @@ def main():
         res[name] = ddr(recs)
         print(f"  {name:7s}", {c.value: round(res[name][c], 3) for c in CLASSES})
 
-    fig, ax = plt.subplots(figsize=(4.6, 2.9))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.8))
     x = np.arange(len(CLASSES)); w = 0.26
     colors = {"FIFO": "#8d8d8d", "strict": "#2c7fb8", "WFQ": "#2e7d32"}
+    labels = {"FIFO": "FIFO", "strict": "strict priority", "WFQ": "WFQ (DRR)"}
     for i, name in enumerate(["FIFO", "strict", "WFQ"]):
-        ax.bar(x+(i-1)*w, [res[name][c] for c in CLASSES], w, label=name, color=colors[name])
-    ax.set_xticks(x); ax.set_xticklabels([c.value for c in CLASSES], rotation=15, fontsize=7)
+        ax.bar(x+(i-1)*w, [res[name][c] for c in CLASSES], w, label=labels[name],
+               color=colors[name])
+    ax.set_xticks(x)
+    ax.set_xticklabels(["Emergency", "Telemetry", "Science", "Media"])
     ax.set_ylabel("delivery ratio"); ax.set_ylim(0, 1.05)
-    ax.set_title("Per-class delivery on the REAL srsRAN N6 trace", fontsize=9)
-    ax.legend(fontsize=7, ncol=3, loc="upper center")
-    ax.grid(axis="y", alpha=0.3)
+    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+              handlelength=1.2, columnspacing=1.0)
+    ax.grid(axis="x", visible=False)
     fig.tight_layout(); os.makedirs(a.outdir, exist_ok=True)
     p = os.path.join(a.outdir, "real_policy.pdf")
     fig.savefig(p, bbox_inches="tight"); fig.savefig(p.replace(".pdf", ".png"), dpi=150, bbox_inches="tight")

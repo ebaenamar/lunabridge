@@ -19,6 +19,8 @@ from gateway.contact_plan import ContactPlan, ContactWindow
 from gateway.scheduler import Scheduler, SchedulingPolicy
 from gateway.telemetry import BundleRecord, TerminalState
 from gateway.traffic import TrafficClass
+from analysis.paperstyle import apply as apply_style, COL_W  # noqa: E402
+apply_style()
 
 CSV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "gateway", "lcrns_relay_contact_plan_1sv.csv")
@@ -181,19 +183,23 @@ def fig_videosweep_closed(outdir, dt, check=True, rate_bps=50e6,
             sim = run_class(plan, TrafficClass.MEDIA, float(L), st['span'], dt, rate_override=r)[0]
             cf = closed_form_P(plan, st, L, mbps * 1e6)
             print(f"  check {mbps:2d} Mbps L={L/3600:5.1f} h: closed={cf:.3f} scheduler={sim:.3f} |d|={abs(cf-sim):.3f}")
-    fig, ax = plt.subplots(figsize=(3.5, 2.4))
-    for mbps, col in zip(mbps_list, cmap):
+    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    # every rate <= C_bh,eff gives the SAME gap-limited curve: draw it once
+    below = [m for m in mbps_list if m <= bh]
+    above = [m for m in mbps_list if m > bh]
+    curves = ([(below[-1], f"{below[0]}–{below[-1]} Mb/s", "#2c7fb8", "-")] if below else [])
+    curves += [(m, f"{m} Mb/s", c, "--") for m, c in zip(above, ["#e08214", "#c0392b"])]
+    for mbps, lbl, col, ls in curves:
         ys = [closed_form_P(plan, st, L, mbps * 1e6) for L in ttls]
-        adm = "" if mbps <= bh else "  (inadmissible)"
-        ax.plot(ttls / 3600, ys, color=col, lw=1.7, label=f"{mbps} Mb/s{adm}")
-    ax.axvline(st['gmax'] / 3600, ls=":", color="gray", lw=1)
-    ax.text(st['gmax'] / 3600, 0.03, f"$G_{{\\max}}$={st['gmax']/3600:.1f}h",
-            rotation=90, fontsize=6.5, ha="right", va="bottom")
-    ax.axhline(1.0, ls="--", color="k", lw=0.6)
+        ax.plot(ttls / 3600, ys, color=col, ls=ls, label=lbl)
+    ax.axvline(st['gmax'] / 3600, ls=":", color="gray", lw=0.8)
+    ax.text(st['gmax'] / 3600 * 1.12, 0.05, "$G_{\\max}$", ha="left", va="bottom")
     ax.set_xscale("log"); ax.set_xlabel("bundle lifetime $L$ (h)")
-    ax.set_ylabel("delivery ratio"); ax.set_ylim(0, 1.05)
-    ax.legend(fontsize=6.3, loc="lower right", title=f"offered rate ($C_{{bh,eff}}$={bh:.1f} Mb/s)", title_fontsize=6.3)
-    ax.grid(alpha=0.3, which="both")
+    ax.set_ylabel("delivery ratio"); ax.set_ylim(0, 1.04)
+    ax.set_xlim(ttls[0] / 3600, ttls[-1] / 3600)
+    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+              columnspacing=1.0)
+    ax.grid(alpha=0.3, which="major")
     fig.tight_layout(); os.makedirs(outdir, exist_ok=True)
     p = os.path.join(outdir, "admissibility.pdf")
     fig.savefig(p, bbox_inches="tight"); fig.savefig(p.replace(".pdf", ".png"), dpi=150, bbox_inches="tight")

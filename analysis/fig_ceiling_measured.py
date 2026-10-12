@@ -15,10 +15,13 @@ Usage: python -m analysis.fig_ceiling_measured --pilot <dir with results.json,
        schedule.json> --plan gateway/lcrns_relay_contact_plan_1sv.csv --out figs
 """
 from __future__ import annotations
-import argparse, csv, json, os
+import argparse, csv, json, os, sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from analysis.paperstyle import apply as apply_style, COL_W  # noqa: E402
+apply_style()
 
 
 def law(windows, L):
@@ -48,21 +51,20 @@ def main():
     pc = [law(Wc, x * gmax_c)[0] for x in rho]
     pf = [law(Wf, x * gmax_f)[0] for x in rho]
 
-    fig, ax = plt.subplots(figsize=(3.5, 2.45))
-    ax.plot(rho, pf, color="#888", lw=1.2, ls="--",
-            label=f"closed form, full 90-day plan ($\\delta$={duty_f:.3f})")
-    ax.plot(rho, pc, color="#2c3e50", lw=1.5,
-            label=f"closed form, compressed slice ($\\delta$={duty_c:.3f})")
+    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    ax.plot(rho, pf, color="#888", lw=1.1, ls="--", label="closed form, 90-day plan")
+    ax.plot(rho, pc, color="#2c3e50", label="closed form, slice")
     ax.plot([r["rho"] for r in res], [r["measured"] for r in res], "o",
-            color="#c0392b", ms=5, mec="white", mew=0.6, zorder=5,
-            label="measured, real µD3TN nodes")
-    ax.axhline(duty_c, color="#2c3e50", lw=0.7, ls=":")
-    ax.axvline(1.0, color="#555", lw=0.7, ls=":")
-    ax.text(1.02, duty_c + 0.004, "$\\rho=1$", fontsize=7, color="#555")
+            color="#c0392b", ms=4.5, mec="white", mew=0.5, zorder=5,
+            label="measured (µD3TN)")
+    ax.axhline(duty_c, color="#2c3e50", lw=0.6, ls=":")
+    ax.axvline(1.0, color="#555", lw=0.6, ls=":")
+    ax.text(1.58, duty_c - 0.003, "slice duty cycle $\\delta$", ha="right", va="top",
+            color="#2c3e50", fontsize=7)
     ax.set_xlabel("lifetime-to-gap ratio $\\rho = L/G_{\\max}$")
     ax.set_ylabel("delivery ratio")
     ax.set_xlim(0, 1.6); ax.set_ylim(duty_c - 0.03, 1.01)
-    ax.grid(alpha=0.25); ax.legend(fontsize=6.2, loc="upper left")
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 0.2))
     fig.tight_layout()
     os.makedirs(a.out, exist_ok=True)
     p = os.path.join(a.out, "ceiling_measured.pdf")
