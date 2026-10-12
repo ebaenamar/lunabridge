@@ -183,7 +183,7 @@ def fig_videosweep_closed(outdir, dt, check=True, rate_bps=50e6,
             sim = run_class(plan, TrafficClass.MEDIA, float(L), st['span'], dt, rate_override=r)[0]
             cf = closed_form_P(plan, st, L, mbps * 1e6)
             print(f"  check {mbps:2d} Mbps L={L/3600:5.1f} h: closed={cf:.3f} scheduler={sim:.3f} |d|={abs(cf-sim):.3f}")
-    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.78))
     # every rate <= C_bh,eff gives the SAME gap-limited curve: draw it once
     below = [m for m in mbps_list if m <= bh]
     above = [m for m in mbps_list if m > bh]

@@ -101,7 +101,7 @@ def main():
         if re.search(r"Scheduling request failed|releasing|Radio link failure", l, re.I) and rel is None:
             rel = k8s_ts(l) - t0
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.8))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.65))
     for s0, s1 in spans:
         ax.axvspan(s0, s1 if s1 is not None else t_end, color="#2c3e50", alpha=0.12, lw=0)
     s0, s1 = spans[0]
@@ -123,8 +123,10 @@ def main():
     out = rate[(edges[:-1] > spans[0][0] + 5) & (edges[:-1] < (spans[0][1] or t_end))]
     print(f"traverse start {datetime.utcfromtimestamp(t0):%H:%M:%S}Z; outage spans {spans}; "
           f"attach {attach:.0f}s; release {rel}")
-    print(f"LOS echoes/s mean {los.mean():.1f} (of 100 sent/s); outage echoes/s mean "
-          f"{out.mean():.2f}, max {out.max():.0f}; gNB samples {len(gb)} "
+    s1 = spans[0][1] or t_end
+    n_out = int(((rep - t0 > spans[0][0]) & (rep - t0 < s1)).sum())
+    print(f"LOS echoes/s mean {los.mean():.1f}; replies strictly inside the first outage "
+          f"({spans[0][0]:.1f}-{s1:.1f} s): {n_out}; gNB samples {len(gb)} "
           f"(LOS median {np.median([b for t,b in zip(gt,gb) if t < spans[0][0]]) if gb else float('nan'):.2f} Mb/s)")
     print("wrote", a.out + ".pdf")
 

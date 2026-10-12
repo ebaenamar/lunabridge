@@ -45,7 +45,7 @@ def main():
         u = r["ue"]; t[u].append(float(r["t_s"]))
         pl[u].append(float(r["pl_db"])); og[u].append(int(r.get("outage", 0)))
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.78))
     for u in ["UE1_LOS", "UE2_fringe", "UE3_rover"]:
         if u not in t:
             continue

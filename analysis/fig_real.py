@@ -12,9 +12,11 @@ its DSCP; per-bundle lifetimes from CLASS_SPECS at capture time: 23,627 /
 47,254 / 165,389 / 11,813 s).
 
 Defaults reproduce the paper figure: a congested test plan of nine 8 s
-contacts at 10 Mb/s every 150 s (a congestion test, not the LCRNS plan; the last contact opens at
-1,200 s, after the final arrival, so no bundle is cut off by the end of the
-plan), 720 Mbit of capacity against 893 Mbit offered, and a 30 MB buffer.
+contacts at 10 Mb/s every 150 s (a congestion test, not the LCRNS plan; contacts start at t=0, so the first
+finds an almost empty buffer), 720 Mbit of nominal capacity against 893 Mbit
+offered, and a 30 MB buffer. Under every policy 646 Mbit is delivered, 87 Mbit
+is dropped at admission and 160 Mbit is still queued when the last contact
+closes; policies differ only in which class absorbs those losses.
 """
 from __future__ import annotations
 import argparse, os, sys, copy
@@ -73,7 +75,7 @@ def main():
         res[name] = ddr(recs)
         print(f"  {name:7s}", {c.value: round(res[name][c], 3) for c in CLASSES})
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.8))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.65))
     x = np.arange(len(CLASSES)); w = 0.26
     colors = {"FIFO": "#8d8d8d", "strict": "#2c7fb8", "WFQ": "#2e7d32"}
     labels = {"FIFO": "FIFO", "strict": "strict priority", "WFQ": "WFQ (DRR)"}

@@ -119,17 +119,17 @@ def fig_buffer_required(outdir: str) -> str:
     a = analytical(MISSION_PROFILE, gmax)
     total_rate, crit_rate = a["total_rate"], a["crit_rate"]
     gaps = np.linspace(60, gmax, 200)
-    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.78))
     ax.plot(gaps / 3600, total_rate * gaps / GB, color="#c0392b",
-            label="native BPv7 (whole backlog)")
+            label="class-blind (whole backlog)")
     ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32",
             label="priority-aware (critical only)")
     ax.axhline(CM4_BUFFER / GB, ls="--", color="k", lw=0.7)
-    ax.text(gmax / 3600 * 0.55, CM4_BUFFER / GB * 0.8, "256 MB store", va="top",
+    ax.text(gmax / 3600 * 0.55, CM4_BUFFER / GB * 0.8, "256 MB store (assumed)", va="top",
             ha="center", fontsize=7)
     ax.set_yscale("log")
     ax.set_xlabel("blackout duration (h)")
-    ax.set_ylabel("buffer for zero safety loss (GB)")
+    ax.set_ylabel("required buffer (GB)")
     xg = gmax / 3600 * 0.985
     ax.annotate("", xy=(xg, a["B_native"] / GB), xytext=(xg, a["B_critical"] / GB),
                 arrowprops=dict(arrowstyle="<->", lw=0.8, color="#333"))

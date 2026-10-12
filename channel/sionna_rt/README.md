@@ -96,7 +96,10 @@ initial LOS channel while the UE attaches, then plays the traverse.
 **Demonstrated (2026-10-07):** the standalone broker plays the real-terrain trace
 in the live loop, the UE attaches, DL throughput reaches **up to 22 Mbps in LOS**,
 and the link goes to **blackout/outage at the crater-rim cliff** (RT shadow),
-recovering when the looped traverse returns to LOS (`figs/closed_loop.png`). This
+recovering when the looped traverse returns to LOS (`figs/closed_loop.png`).
+(Paper run 2026-10-12, `data/closedloop_v2/`: the UE did NOT recover -- it declared
+scheduling-request failure and released at 307 s, 10 s after the trace looped back
+to LOS, and its random-access attempts failed until the next outage.) This
 is the full channel x traffic x DTN loop. Note: at `slowdown=2` a saturating flood
 can destabilise the link; a gentle sustained load (<~2 Mbps) gives the cleanest
 throughput-vs-time trace.

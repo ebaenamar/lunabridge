@@ -51,7 +51,7 @@ def main():
     pc = [law(Wc, x * gmax_c)[0] for x in rho]
     pf = [law(Wf, x * gmax_f)[0] for x in rho]
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.95))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.78))
     ax.plot(rho, pf, color="#888", lw=1.1, ls="--", label="closed form, 90-day plan")
     ax.plot(rho, pc, color="#2c3e50", label="closed form, slice")
     ax.plot([r["rho"] for r in res], [r["measured"] for r in res], "o",
@@ -64,7 +64,7 @@ def main():
     ax.set_xlabel("lifetime-to-gap ratio $\\rho = L/G_{\\max}$")
     ax.set_ylabel("delivery ratio")
     ax.set_xlim(0, 1.6); ax.set_ylim(duty_c - 0.03, 1.01)
-    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 0.2))
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 0.27))
     fig.tight_layout()
     os.makedirs(a.out, exist_ok=True)
     p = os.path.join(a.out, "ceiling_measured.pdf")

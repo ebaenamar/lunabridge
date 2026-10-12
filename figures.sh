@@ -19,6 +19,8 @@ cp "$TMP/real_policy.pdf" "$OUT/"
 # Fig. ceiling: real µD3TN compressed-clock measurement
 python3 analysis/fig_ceiling_measured.py --pilot runs/ceiling_pilot --plan gateway/lcrns_relay_contact_plan_1sv.csv --out "$TMP"
 cp "$TMP/ceiling_measured.pdf" "$OUT/"
+# Table I: link budget from the true site-relay slant range (prints only)
+python3 analysis/link_budget.py
 # Fig. buffer: analytic buffer sizing
 python3 analysis/make_figures.py --outdir "$TMP"
 cp "$TMP/buffer_required.pdf" "$OUT/"
