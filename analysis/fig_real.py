@@ -75,6 +75,28 @@ def main():
         res[name] = ddr(recs)
         print(f"  {name:7s}", {c.value: round(res[name][c], 3) for c in CLASSES})
 
+    # admission x drain: every combination on the same trace and plan (LB-H4)
+    combos = [("FIFO", "drop-tail", SchedulingPolicy.FIFO, False),
+              ("FIFO", "priority-aware", SchedulingPolicy.FIFO, True),
+              ("strict", "drop-tail", SchedulingPolicy.STRICT_PRIORITY, False),
+              ("strict", "priority-aware", SchedulingPolicy.STRICT_PRIORITY, True),
+              ("WFQ", "drop-tail", SchedulingPolicy.WFQ, False),
+              ("WFQ", "priority-aware", SchedulingPolicy.WFQ, True)]
+    lines = []
+    for drain, adm, pol, pa in combos:
+        recs = copy.deepcopy(bundles)
+        Scheduler(plan, max_queue_bytes=a.queue_bytes, policy=pol,
+                  priority_aware_admission=pa).run(recs)
+        r = ddr(recs)
+        mbit = sum(x.size_bytes for x in recs
+                   if x.terminal_state is TerminalState.DELIVERED) * 8 / 1e6
+        print(f"  {drain:6s} {adm:14s}", {c.value: round(r[c], 3) for c in CLASSES},
+              f"{mbit:.0f} Mbit")
+        lines.append(f"{drain} & {adm} & " + " & ".join(f"{100 * r[c]:.0f}" for c in CLASSES)
+                     + f" & {mbit:.0f} \\\\")
+    os.makedirs(a.outdir, exist_ok=True)
+    open(os.path.join(a.outdir, "admission_drain_rows.tex"), "w").write("\n".join(lines) + "\n")
+
     fig, ax = plt.subplots(figsize=(COL_W, 1.65))
     x = np.arange(len(CLASSES)); w = 0.26
     colors = {"FIFO": "#8d8d8d", "strict": "#2c7fb8", "WFQ": "#2e7d32"}

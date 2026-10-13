@@ -690,6 +690,26 @@ class TestPriorityAwareAdmission(unittest.TestCase):
         self.assertFalse(any(d.reason == "evicted_by_priority"
                              for d in sched.decisions))
 
+    def test_explicit_flag_decouples_admission_from_drain(self):
+        """An explicit priority_aware_admission=True applies to FIFO too, so
+        admission and drain can be varied independently: FIFO drain with
+        priority-aware admission evicts MEDIA for a later EMERGENCY, while the
+        default (None) keeps FIFO class-blind."""
+        def run(flag):
+            kw = {} if flag is None else {"priority_aware_admission": flag}
+            sched = Scheduler(self._one_big_window(), max_queue_bytes=1000,
+                              policy=SchedulingPolicy.FIFO, **kw)
+            media = BundleRecord("media-1", "f1", TrafficClass.MEDIA,
+                                 size_bytes=600, ingress_ts=0.0)
+            media.set_ttl()
+            emergency = BundleRecord("emg-1", "f2", TrafficClass.EMERGENCY,
+                                     size_bytes=600, ingress_ts=1.0)
+            emergency.set_ttl()
+            sched.run([media, emergency])
+            return emergency.terminal_state
+        self.assertEqual(run(None), TerminalState.QUEUE_OVERFLOW)
+        self.assertEqual(run(True), TerminalState.DELIVERED)
+
     def test_emergency_protected_under_buffer_pressure_real_plan(self):
         """End-to-end on the real LCRNS 1-SV plan: a tight buffer fills with
         SCIENCE_BULK inside the first real window; a later EMERGENCY evicts it

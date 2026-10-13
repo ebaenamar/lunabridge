@@ -225,7 +225,7 @@ class Scheduler:
 
     def __init__(self, plan: ContactPlan, max_queue_bytes: float,
                  policy: SchedulingPolicy = SchedulingPolicy.STRICT_PRIORITY,
-                 priority_aware_admission: bool = True):
+                 priority_aware_admission: Optional[bool] = None):
         if max_queue_bytes <= 0:
             raise ValueError(
                 f"max_queue_bytes ({max_queue_bytes}) must be > 0; a "
@@ -241,6 +241,10 @@ class Scheduler:
         # regardless of class. Set True (default) to enable the DSCP-driven
         # priority-aware admission this project adds. Kept as an explicit knob so
         # the paper can run native-BPv7 vs. the fix on the SAME plan+trace.
+        # None (default) = by policy: on for every class-aware policy, off for
+        # the FIFO floor. An explicit True/False applies to EVERY policy, so
+        # admission and drain can be varied independently (e.g. FIFO drain +
+        # priority-aware admission).
         self.priority_aware_admission = priority_aware_admission
         self.decisions: List[SchedulingDecision] = []
 
@@ -290,8 +294,9 @@ class Scheduler:
     # bundle survives buffer pressure -- admission protects mission-criticality
     # by rank, drain shares bandwidth by weight.
     def _admission_is_priority_aware(self) -> bool:
-        return (self.priority_aware_admission
-                and self.policy is not SchedulingPolicy.FIFO)
+        if self.priority_aware_admission is None:
+            return self.policy is not SchedulingPolicy.FIFO
+        return self.priority_aware_admission
 
     def _admit_one(self, bundle: BundleRecord, ts: float) -> None:
         bundle.queue_admission_ts = ts
