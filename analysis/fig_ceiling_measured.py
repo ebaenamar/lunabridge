@@ -51,7 +51,7 @@ def main():
     pc = [law(Wc, x * gmax_c)[0] for x in rho]
     pf = [law(Wf, x * gmax_f)[0] for x in rho]
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.78))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.6))
     ax.plot(rho, pf, color="#888", lw=1.1, ls="--", label="closed form, 90-day plan")
     ax.plot(rho, pc, color="#2c3e50", label="closed form, slice")
     ax.plot([r["rho"] for r in res], [r["measured"] for r in res], "o",

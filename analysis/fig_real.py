@@ -88,12 +88,18 @@ def main():
         Scheduler(plan, max_queue_bytes=a.queue_bytes, policy=pol,
                   priority_aware_admission=pa).run(recs)
         r = ddr(recs)
+        # share of each class dropped at admission (the rest of the undelivered
+        # bundles are still queued when the last contact closes)
+        drop = {}
+        for c in CLASSES:
+            rs = [x for x in recs if x.traffic_class is c]
+            drop[c] = sum(x.terminal_state is TerminalState.QUEUE_OVERFLOW for x in rs) / len(rs)
         mbit = sum(x.size_bytes for x in recs
                    if x.terminal_state is TerminalState.DELIVERED) * 8 / 1e6
-        print(f"  {drain:6s} {adm:14s}", {c.value: round(r[c], 3) for c in CLASSES},
-              f"{mbit:.0f} Mbit")
-        lines.append(f"{drain} & {adm} & " + " & ".join(f"{100 * r[c]:.0f}" for c in CLASSES)
-                     + f" & {mbit:.0f} \\\\")
+        print(f"  {drain:6s} {adm:14s}", {c.value: (round(r[c], 3), round(drop[c], 3))
+                                          for c in CLASSES}, f"{mbit:.0f} Mbit")
+        lines.append(f"{drain} & {adm} & " + " & ".join(
+            f"{100 * r[c]:.0f} ({100 * drop[c]:.0f})" for c in CLASSES) + f" & {mbit:.0f} \\\\")
     os.makedirs(a.outdir, exist_ok=True)
     open(os.path.join(a.outdir, "admission_drain_rows.tex"), "w").write("\n".join(lines) + "\n")
 

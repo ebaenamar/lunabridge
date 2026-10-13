@@ -101,7 +101,7 @@ def main():
         if re.search(r"Scheduling request failed|releasing|Radio link failure", l, re.I) and rel is None:
             rel = k8s_ts(l) - t0
 
-    fig, ax = plt.subplots(figsize=(COL_W, 1.65))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.5))
     for s0, s1 in spans:
         ax.axvspan(s0, s1 if s1 is not None else t_end, color="#2c3e50", alpha=0.12, lw=0)
     s0, s1 = spans[0]
@@ -109,7 +109,7 @@ def main():
             va="center", color="#2c3e50", fontsize=7)
     mask = edges[:-1] >= first_send
     ax.step(edges[:-1][mask], rate[mask], where="post", color="#c0392b", lw=1.0)
-    ax.set_ylabel("ICMP replies per second")
+    ax.set_ylabel("ICMP replies/s")
     ax.set_xlabel("time since traverse start (s)")
     ax.set_xlim(0, t_end); ax.set_ylim(-4, 112)
     for x, lab in ((attach, "attach"), (rel, "UE release")):
