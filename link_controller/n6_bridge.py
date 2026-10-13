@@ -111,17 +111,37 @@ def gtpu_packets(stream):
 # --------------------------------------------------------------------------- #
 # in-namespace workers
 # --------------------------------------------------------------------------- #
-def worker_rx(args):
+def aap_connect(port, register=None, tries=60):
+    """Connect to a uD3TN AAP port, waiting for the node to come up."""
     from ud3tn_utils.aap import AAPTCPClient
+    for i in range(tries):
+        try:
+            c = AAPTCPClient(address=("127.0.0.1", port)); c.connect()
+            if register is not None:
+                c.register(register) if register else c.register()
+            return c
+        except Exception:
+            time.sleep(0.5)
+    raise RuntimeError(f"uD3TN AAP port {port} not reachable")
+
+
+def configure_contacts(i, contacts, LegacyConfigMessage):
+    c = aap_connect(SURF_AAP0 + i, register="")
+    c.send_bundle(f"dtn://surf{i}.dtn/config",
+                  bytes(LegacyConfigMessage("dtn://relay.dtn/", f"mtcp:{IP_R}:{RELAY_MTCP}",
+                                            contacts=contacts)))
+    c.disconnect()
+
+
+def worker_rx(args):
     out = open(args.file, "a", buffering=1)
-    with AAPTCPClient(address=("127.0.0.1", RELAY_AAP)) as c:
-        c.register("sink")
-        while True:
-            msg = c.receive()
-            pl = getattr(msg, "payload", None)
-            if pl:
-                hdr = pl[:pl.index(b"|")].decode()
-                out.write(json.dumps({"h": hdr, "n": len(pl), "t": time.time()}) + "\n")
+    c = aap_connect(RELAY_AAP, register="sink")
+    while True:
+        msg = c.receive()
+        pl = getattr(msg, "payload", None)
+        if pl:
+            hdr = pl[:pl.index(b"|")].decode()
+            out.write(json.dumps({"h": hdr, "n": len(pl), "t": time.time()}) + "\n")
 
 
 def worker_bridge(args):
@@ -133,14 +153,8 @@ def worker_bridge(args):
     contacts = [Contact(s, e, 10_000_000) for s, e in sched["contacts_dtn"]]
     clients = {}
     for i, cls in enumerate(CLASSES):
-        with AAPTCPClient(address=("127.0.0.1", SURF_AAP0 + i)) as c:
-            c.register()
-            c.send_bundle(f"dtn://surf{i}.dtn/config",
-                          bytes(LegacyConfigMessage("dtn://relay.dtn/",
-                                                    f"mtcp:{IP_R}:{RELAY_MTCP}",
-                                                    contacts=contacts)))
-        c = AAPTCPClient(address=("127.0.0.1", SURF_AAP0 + i)); c.connect(); c.register("src")
-        clients[cls] = c
+        configure_contacts(i, contacts, LegacyConfigMessage)
+        clients[cls] = aap_connect(SURF_AAP0 + i, register="src")
     print("[bridge] contacts configured; qos map", qmap, flush=True)
     out = open(args.file, "a", buffering=1)
     t0, t1 = sched["t_start_unix"], sched["t_end_unix"]
@@ -165,6 +179,92 @@ def worker_bridge(args):
     print(f"[bridge] encapsulated {seq} packets; {unknown} with unknown TEID", flush=True)
     for c in clients.values():
         c.disconnect()
+
+
+def worker_gateway(args):
+    """Bridge + LIVE gateway scheduler: the bridge thread classifies each packet
+    by TEID->5QI and admits it into a bounded buffer; this thread drains the
+    buffer during contacts at the contact rate, in policy order, into the uD3TN
+    surface node of the bundle's class."""
+    sys.path.insert(0, HERE)
+    from live_gateway import LiveGateway
+    from ud3tn_utils.aap import AAPTCPClient
+    from ud3tn_utils.config import LegacyConfigMessage, Contact
+    sched = json.load(open(args.schedule))
+    qmap = {int(k): int(v) for k, v in json.load(open(args.qos_map)).items()}
+    contacts = [Contact(s, e, 10_000_000) for s, e in sched["contacts_dtn"]]
+    C = sched["contacts_unix"]
+    clients = {}
+    for i, cls in enumerate(CLASSES):
+        configure_contacts(i, contacts, LegacyConfigMessage)
+        clients[cls] = aap_connect(SURF_AAP0 + i, register="src")
+    out = open(args.file, "a", buffering=1)
+    evf = open(args.file.replace("sent.jsonl", "gw.jsonl"), "w", buffering=1)
+    lock = threading.Lock()
+
+    def log(ev, b, t):
+        with lock:
+            evf.write(json.dumps({"ev": ev, "seq": b["seq"], "cls": b["cls"], "t": t}) + "\n")
+    gw = LiveGateway(args.policy, args.admission, int(args.buffer_bytes),
+                     sched["lifetimes"], log=log)
+    print(f"[gateway] policy={args.policy} admission={args.admission} "
+          f"buffer={int(args.buffer_bytes)} B rate={args.rate_bps:.0f} b/s; qos map {qmap}",
+          flush=True)
+    t0, t1 = sched["t_start_unix"], sched["t_end_unix"]
+    state = {"seq": 0, "unknown": 0, "done": False}
+
+    def reader():
+        for ts, teid, qfi, inner in gtpu_packets(sys.stdin.buffer):
+            now = time.time()
+            if now >= t1:
+                break
+            if now < t0:
+                continue
+            fiveqi = qmap.get(teid)
+            cls = FIVEQI_CLASS.get(fiveqi)
+            if cls is None:
+                state["unknown"] += 1
+                continue
+            seq = state["seq"]; state["seq"] += 1
+            hdr = f"{seq}:{cls}:{teid}:{qfi}:{fiveqi}:{now:.3f}".encode()
+            b = {"seq": seq, "cls": cls, "n": len(inner), "t": now,
+                 "payload": hdr + b"|" + inner}
+            with lock:
+                out.write(json.dumps({"seq": seq, "cls": cls, "teid": teid, "qfi": qfi,
+                                      "5qi": fiveqi, "n": len(inner), "t": now,
+                                      "t_cap": ts}) + "\n")
+            gw.admit(b, now)
+        state["done"] = True
+    threading.Thread(target=reader, daemon=True).start()
+
+    def in_contact(t):
+        return any(s <= t < e for s, e in C)
+    sent_fwd = 0
+    t_free = 0.0                      # paced link: next instant the link is free
+    while time.time() < t1:
+        now = time.time()
+        if not in_contact(now):
+            time.sleep(0.005); continue
+        if now < t_free:
+            time.sleep(min(0.005, t_free - now)); continue
+        b = gw.next(now)
+        if b is None:
+            time.sleep(0.002); continue
+        clients[b["cls"]].send_bundle("dtn://relay.dtn/sink", b["payload"])
+        log("fwd", b, now)
+        sent_fwd += 1
+        t_free = max(t_free, now) + (len(b["payload"]) + 60) * 8 / args.rate_bps
+    left = gw.snapshot()
+    for c, bs in left.items():
+        for b in bs:
+            log("queued_at_end", b, time.time())
+    print(f"[gateway] admitted+forwarded {sent_fwd}; encapsulated {state['seq']}; "
+          f"{state['unknown']} unknown TEID; queued at end "
+          f"{ {c: len(v) for c, v in left.items()} }", flush=True)
+    for c in clients.values():
+        c.disconnect()
+    out.close(); evf.close()
+    os._exit(0)   # the reader thread is blocked on stdin; skip interpreter teardown
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +303,8 @@ def run(args):
                      shell=True, stdout=lr, stderr=lr)
     for i, cls in enumerate(CLASSES):
         lm = open(os.path.join(args.out, f"surf_{cls}_L{Ls[cls]}.log"), "w")
-        subprocess.Popen(f"ip netns exec {NS_S} {UD} -e dtn://surf{i}.dtn/ -l {Ls[cls]} "
+        node_L = 86400 if args.policy else Ls[cls]   # the live gateway enforces lifetimes
+        subprocess.Popen(f"ip netns exec {NS_S} {UD} -e dtn://surf{i}.dtn/ -l {node_L} "
                          f"-a 127.0.0.1 -p {SURF_AAP0 + i} -c mtcp:{IP_S},{SURF_MTCP0 + i} -L {UD_LOG}",
                          shell=True, stdout=lm, stderr=lm)
     time.sleep(2.0)
@@ -231,8 +332,15 @@ def run(args):
             netem(NS_S, VE_S, True); netem(NS_R, VE_R, True)
     threading.Thread(target=toggler, daemon=True).start()
     # the pcap stream arrives on our stdin; hand it to the in-namespace bridge
-    subprocess.run(f"ip netns exec {NS_S} {PY} {me} bridge --schedule {sf} "
-                   f"--qos-map {args.qos_map} --file {txf}", shell=True, stdin=sys.stdin)
+    if args.policy:
+        cmd = (f"ip netns exec {NS_S} {PY} {me} gateway --schedule {sf} "
+               f"--qos-map {args.qos_map} --file {txf} --policy {args.policy} "
+               f"--admission {args.admission} --buffer-bytes {args.buffer_bytes} "
+               f"--rate-bps {args.rate_bps}")
+    else:
+        cmd = (f"ip netns exec {NS_S} {PY} {me} bridge --schedule {sf} "
+               f"--qos-map {args.qos_map} --file {txf}")
+    subprocess.run(cmd, shell=True, stdin=sys.stdin)
     time.sleep(args.drain)
     os.killpg(os.getpgid(rx.pid), signal.SIGTERM)
     cleanup()
@@ -257,6 +365,16 @@ def analyze(out):
                          measured=d / len(mine),
                          per_bundle=sum(predict_one(s["t"], C, L) for s in mine) / len(mine),
                          closed_form=closed_form(W, L)))
+    gwf = os.path.join(out, "gw.jsonl")
+    if os.path.exists(gwf):                    # live gateway: fate of every bundle
+        fate = {}
+        for l in open(gwf):
+            e = json.loads(l)
+            fate.setdefault(e["cls"], {}).setdefault(e["ev"], 0)
+            fate[e["cls"]][e["ev"]] += 1
+        for r in rows:
+            r["gateway"] = fate.get(r["cls"], {})
+            print(f"  {r['cls']:10s} gateway fates {r['gateway']}")
     json.dump(rows, open(os.path.join(out, "results.json"), "w"), indent=1)
     for r in rows:
         print(f"{r['cls']:10s} 5QI {r['fiveqi']:>2} QFI {r['qfi']} L {r['L']:>3}s "
@@ -273,12 +391,22 @@ def main():
     r.add_argument("--k", type=float, default=720); r.add_argument("--qos-map", required=True)
     r.add_argument("--lead", type=int, default=15); r.add_argument("--drain", type=float, default=5.0)
     r.add_argument("--out", required=True)
+    r.add_argument("--policy", choices=["fifo", "strict", "wfq"], default=None,
+                   help="run the live gateway scheduler behind the bridge")
+    r.add_argument("--admission", choices=["droptail", "priority"], default="droptail")
+    r.add_argument("--buffer-bytes", type=float, default=2e6)
+    r.add_argument("--rate-bps", type=float, default=5e5)
+    g = sub.add_parser("gateway"); g.add_argument("--schedule", required=True)
+    g.add_argument("--qos-map", required=True); g.add_argument("--file", required=True)
+    g.add_argument("--policy", required=True); g.add_argument("--admission", required=True)
+    g.add_argument("--buffer-bytes", type=float, required=True)
+    g.add_argument("--rate-bps", type=float, required=True)
     x = sub.add_parser("rx"); x.add_argument("--file", required=True)
     b = sub.add_parser("bridge"); b.add_argument("--schedule", required=True)
     b.add_argument("--qos-map", required=True); b.add_argument("--file", required=True)
     a = sub.add_parser("analyze"); a.add_argument("--out", required=True)
     args = ap.parse_args()
-    {"run": run, "rx": worker_rx, "bridge": worker_bridge,
+    {"run": run, "rx": worker_rx, "bridge": worker_bridge, "gateway": worker_gateway,
      "analyze": lambda a: analyze(a.out)}[args.cmd](args)
 
 

@@ -1,0 +1,75 @@
+[
+ {
+  "cls": "emergency",
+  "fiveqi": 69,
+  "qfi": [
+   1
+  ],
+  "L": 33,
+  "rho": 1.2222222222222223,
+  "sent": 360,
+  "delivered": 360,
+  "measured": 1.0,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 360
+  }
+ },
+ {
+  "cls": "telemetry",
+  "fiveqi": 70,
+  "qfi": [
+   1
+  ],
+  "L": 66,
+  "rho": 2.4444444444444446,
+  "sent": 2878,
+  "delivered": 2878,
+  "measured": 1.0,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 2878
+  }
+ },
+ {
+  "cls": "sci_bulk",
+  "fiveqi": 9,
+  "qfi": [
+   1
+  ],
+  "L": 230,
+  "rho": 8.518518518518519,
+  "sent": 31506,
+  "delivered": 22982,
+  "measured": 0.729448359042722,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 22982,
+   "drop": 6838,
+   "evict": 291,
+   "queued_at_end": 1395
+  }
+ },
+ {
+  "cls": "media",
+  "fiveqi": 7,
+  "qfi": [
+   1
+  ],
+  "L": 16,
+  "rho": 0.5925925925925926,
+  "sent": 16951,
+  "delivered": 1074,
+  "measured": 0.0633590938587694,
+  "per_bundle": 0.9533360863665861,
+  "closed_form": 0.9514563106796117,
+  "gateway": {
+   "fwd": 1074,
+   "evict": 8035,
+   "drop": 7842
+  }
+ }
+]

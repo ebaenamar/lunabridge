@@ -6,6 +6,8 @@
 # capturing N2, n2_qos_map.py extracts the four TEID -> 5QI pairs, and the bridge
 # classifies every uplink packet by TEID while all four flows run concurrently.
 # Usage: run_bridge_joint.sh <outdir>
+#   env POLICY=fifo|strict|wfq ADMISSION=droptail|priority BUF=<bytes> RATE=<b/s>
+#   runs the live gateway scheduler behind the bridge (congested contacts).
 set -u
 OUT=$1
 D=$(cd "$(dirname "$0")" && pwd)
@@ -29,6 +31,7 @@ nsenter -t "$UPF" -n tcpdump -i eth0 -n -s 0 -U -w - "udp dst port 2152 and dst 
   | env UD3TN="$D/ud3tn_bin" BRIDGE_PY="$D/venv/bin/python" UD_LOG="${UD_LOG:-3}" \
       "$D/venv/bin/python" "$D/n6_bridge.py" run \
       --plan "$D/lcrns_relay_contact_plan_1sv.csv" --windows ${WIN:-8} --k 720 \
-      --qos-map "$OUT/qos_map.json" --out "$OUT"
+      --qos-map "$OUT/qos_map.json" --out "$OUT" \
+      ${POLICY:+--policy $POLICY --admission ${ADMISSION:-droptail} --buffer-bytes ${BUF:-2e6} --rate-bps ${RATE:-5e5}}
 pkill -f "tcpdump -i eth0 -n -s 0 -U -w -"; kill $PIDS 2>/dev/null
 echo "[$(date +%T)] done joint"

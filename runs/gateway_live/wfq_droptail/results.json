@@ -1,0 +1,76 @@
+[
+ {
+  "cls": "emergency",
+  "fiveqi": 69,
+  "qfi": [
+   1
+  ],
+  "L": 33,
+  "rho": 1.2222222222222223,
+  "sent": 360,
+  "delivered": 286,
+  "measured": 0.7944444444444444,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 286,
+   "drop": 74
+  }
+ },
+ {
+  "cls": "telemetry",
+  "fiveqi": 70,
+  "qfi": [
+   1
+  ],
+  "L": 66,
+  "rho": 2.4444444444444446,
+  "sent": 2878,
+  "delivered": 2192,
+  "measured": 0.7616400277970813,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 2192,
+   "drop": 686
+  }
+ },
+ {
+  "cls": "sci_bulk",
+  "fiveqi": 9,
+  "qfi": [
+   1
+  ],
+  "L": 230,
+  "rho": 8.518518518518519,
+  "sent": 31039,
+  "delivered": 15474,
+  "measured": 0.4985341022584491,
+  "per_bundle": 1.0,
+  "closed_form": 1.0,
+  "gateway": {
+   "fwd": 15474,
+   "drop": 14206,
+   "queued_at_end": 1359
+  }
+ },
+ {
+  "cls": "media",
+  "fiveqi": 7,
+  "qfi": [
+   1
+  ],
+  "L": 16,
+  "rho": 0.5925925925925926,
+  "sent": 16711,
+  "delivered": 8951,
+  "measured": 0.5356352103404943,
+  "per_bundle": 0.9503919573933337,
+  "closed_form": 0.9514563106796117,
+  "gateway": {
+   "fwd": 8951,
+   "drop": 7709,
+   "expire": 51
+  }
+ }
+]
