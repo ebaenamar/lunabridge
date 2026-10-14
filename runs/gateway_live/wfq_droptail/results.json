@@ -8,13 +8,13 @@
   "L": 33,
   "rho": 1.2222222222222223,
   "sent": 360,
-  "delivered": 286,
-  "measured": 0.7944444444444444,
+  "delivered": 255,
+  "measured": 0.7083333333333334,
   "per_bundle": 1.0,
   "closed_form": 1.0,
   "gateway": {
-   "fwd": 286,
-   "drop": 74
+   "fwd": 255,
+   "drop": 105
   }
  },
  {
@@ -26,13 +26,13 @@
   "L": 66,
   "rho": 2.4444444444444446,
   "sent": 2878,
-  "delivered": 2192,
-  "measured": 0.7616400277970813,
+  "delivered": 2006,
+  "measured": 0.6970118137595552,
   "per_bundle": 1.0,
   "closed_form": 1.0,
   "gateway": {
-   "fwd": 2192,
-   "drop": 686
+   "fwd": 2006,
+   "drop": 872
   }
  },
  {
@@ -43,15 +43,15 @@
   ],
   "L": 230,
   "rho": 8.518518518518519,
-  "sent": 31039,
-  "delivered": 15474,
-  "measured": 0.4985341022584491,
+  "sent": 31530,
+  "delivered": 15548,
+  "measured": 0.4931176657151919,
   "per_bundle": 1.0,
   "closed_form": 1.0,
   "gateway": {
-   "fwd": 15474,
-   "drop": 14206,
-   "queued_at_end": 1359
+   "fwd": 15548,
+   "drop": 14691,
+   "queued_at_end": 1291
   }
  },
  {
@@ -62,15 +62,16 @@
   ],
   "L": 16,
   "rho": 0.5925925925925926,
-  "sent": 16711,
-  "delivered": 8951,
-  "measured": 0.5356352103404943,
-  "per_bundle": 0.9503919573933337,
+  "sent": 16849,
+  "delivered": 8902,
+  "measured": 0.5283399608285358,
+  "per_bundle": 0.9532316457950026,
   "closed_form": 0.9514563106796117,
   "gateway": {
-   "fwd": 8951,
-   "drop": 7709,
-   "expire": 51
+   "fwd": 8902,
+   "drop": 7879,
+   "expire": 55,
+   "queued_at_end": 13
   }
  }
 ]

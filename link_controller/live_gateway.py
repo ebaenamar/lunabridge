@@ -47,8 +47,14 @@ class LiveGateway:
 
     # -- admission -------------------------------------------------------
     def admit(self, b: dict, now: float) -> bool:
-        """b: {'seq','cls','n','t', 'payload'}"""
+        """b: {'seq','cls','n','t', 'payload'}; n is the bundle's size as charged
+        both in the buffer and on the link."""
         with self.lock:
+            if self.bytes + b["n"] > self.cap:
+                # purge expired bundles first: within a class they share one
+                # lifetime and arrive in order, so they form each queue's head
+                for c in RANK:
+                    self._head(c, now)
             if self.bytes + b["n"] > self.cap and self.admission == "priority":
                 for c in sorted(RANK, key=RANK.get, reverse=True):     # lowest rank first
                     if RANK[c] <= RANK[b["cls"]]:

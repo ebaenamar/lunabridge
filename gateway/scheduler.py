@@ -225,7 +225,8 @@ class Scheduler:
 
     def __init__(self, plan: ContactPlan, max_queue_bytes: float,
                  policy: SchedulingPolicy = SchedulingPolicy.STRICT_PRIORITY,
-                 priority_aware_admission: Optional[bool] = None):
+                 priority_aware_admission: Optional[bool] = None,
+                 fifo_skip_over: bool = True):
         if max_queue_bytes <= 0:
             raise ValueError(
                 f"max_queue_bytes ({max_queue_bytes}) must be > 0; a "
@@ -246,6 +247,12 @@ class Scheduler:
         # admission and drain can be varied independently (e.g. FIFO drain +
         # priority-aware admission).
         self.priority_aware_admission = priority_aware_admission
+        # FIFO drain fills each window greedily and, by default, skips a
+        # head-of-line bundle that does not fit the remaining budget to try
+        # later (smaller) ones. fifo_skip_over=False makes FIFO strict: the
+        # window closes at the first bundle that does not fit, as a paced live
+        # link does (link_controller/live_gateway.py).
+        self.fifo_skip_over = fifo_skip_over
         self.decisions: List[SchedulingDecision] = []
 
         # Active queue: bundles that are admitted and still PENDING.
@@ -408,7 +415,7 @@ class Scheduler:
 
     # -- shared drain primitive (S2-W6-7) ------------------------------------
     def _drain_ordered(self, ordered: List[BundleRecord], window: ContactWindow,
-                        reason: str) -> None:
+                        reason: str, stop_on_nonfit: bool = False) -> None:
         """Shared by DEADLINE_AWARE / UTILITY_PURE / (per-tier in
         UTILITY_AWARE): given a list already sorted in the order this
         policy wants to try bundles, drain greedily against the window's
@@ -429,6 +436,8 @@ class Scheduler:
                 self._log(window.start_ts, b, action="defer",
                            reason="insufficient_budget",
                            contact_id=window.contact_id)
+                if stop_on_nonfit:
+                    break
         return remaining_bits
 
     # -- drain: STRICT_PRIORITY (Day 12 v1, unchanged logic) ---------------
@@ -443,7 +452,8 @@ class Scheduler:
         """Zero class-awareness. Sort by ingress_ts only. Deliberate floor
         baseline -- see SchedulingPolicy.FIFO docstring."""
         ordered = sorted(eligible, key=lambda b: b.ingress_ts)
-        self._drain_ordered(ordered, window, reason="fifo")
+        self._drain_ordered(ordered, window, reason="fifo",
+                            stop_on_nonfit=not self.fifo_skip_over)
 
     # -- drain: DEADLINE_AWARE / EDF (S2-W6-7) -------------------------------
     def _drain_edf(self, eligible: List[BundleRecord],

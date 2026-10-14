@@ -690,6 +690,25 @@ class TestPriorityAwareAdmission(unittest.TestCase):
         self.assertFalse(any(d.reason == "evicted_by_priority"
                              for d in sched.decisions))
 
+    def test_strict_fifo_does_not_skip_over(self):
+        """fifo_skip_over=False: a small bundle behind a head that does not
+        fit the window waits, as on a paced link; the default skips over."""
+        plan = ContactPlan([
+            ContactWindow(contact_id="w0", start_ts=0.0, end_ts=1.0, link_rate_bps=8000.0),
+            ContactWindow(contact_id="w1", start_ts=10.0, end_ts=11.0, link_rate_bps=16000.0),
+        ])
+        def run(skip):
+            big = BundleRecord("big", "f1", TrafficClass.SCIENCE_BULK, size_bytes=1500, ingress_ts=0.0)
+            small = BundleRecord("small", "f2", TrafficClass.EMERGENCY, size_bytes=100, ingress_ts=0.0)
+            a = BundleRecord("a", "f1", TrafficClass.SCIENCE_BULK, size_bytes=600, ingress_ts=-1.0)
+            for b in (big, small, a):
+                b.set_ttl(3600.0)
+            Scheduler(plan, max_queue_bytes=1_000_000, policy=SchedulingPolicy.FIFO,
+                      fifo_skip_over=skip).run([a, big, small])
+            return small.contact_id
+        self.assertEqual(run(True), "w0")    # skips the 1500 B head
+        self.assertEqual(run(False), "w1")   # waits behind it
+
     def test_explicit_flag_decouples_admission_from_drain(self):
         """An explicit priority_aware_admission=True applies to FIFO too, so
         admission and drain can be varied independently: FIFO drain with

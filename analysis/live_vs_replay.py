@@ -43,11 +43,20 @@ def run_dir(d):
     log = open(os.path.join(d, "run.log")).read()
     import re
     m = re.search(r"buffer=(\d+) B rate=(\d+) b/s", log)
+    if m is None:
+        raise RuntimeError(f"{d}: run did not reach the gateway (see run.log)")
     buf, rate = int(m.group(1)), float(m.group(2))
     sent = [json.loads(l) for l in opener(os.path.join(d, "sent.jsonl"))]
     got = {int(json.loads(l)["h"].split(":")[0]) for l in opener(os.path.join(d, "recv.jsonl"))}
     live = {c: (sum(s["seq"] in got for s in sent if s["cls"] == c),
                 sum(1 for s in sent if s["cls"] == c)) for c in ORDER}
+    # live losses: dropped / evicted at admission or expired in the buffer
+    lost_seq = {}
+    for l in opener(os.path.join(d, "gw.jsonl")):
+        e = json.loads(l)
+        if e["ev"] in ("drop", "evict", "expire"):
+            lost_seq[e["seq"]] = e["cls"]
+    live_lost = {c: sum(1 for v in lost_seq.values() if v == c) for c in ORDER}
     # offline replay on the same arrivals, 1 s sub-windows inside every contact
     t0 = sched["t_start_unix"]
     wins = []
@@ -58,14 +67,18 @@ def run_dir(d):
             t += 1.0
     recs = []
     for s in sent:
-        b = BundleRecord(str(s["seq"]), s["cls"], CLS[s["cls"]], s["n"] + 60, ingress_ts=s["t"] - t0)
+        size = s.get("size", s["n"] + 60)        # same bytes the live gateway charged
+        b = BundleRecord(str(s["seq"]), s["cls"], CLS[s["cls"]], size, ingress_ts=s["t"] - t0)
         b.set_ttl(sched["lifetimes"][s["cls"]])
         recs.append(b)
     Scheduler(ContactPlan(wins), max_queue_bytes=buf, policy=POL[policy],
-              priority_aware_admission=(admission == "priority")).run(recs)
+              priority_aware_admission=(admission == "priority"),
+              fifo_skip_over=False).run(recs)     # strict FIFO, like the paced live link
     off = {c: (sum(1 for b in recs if b.flow_id == c and b.terminal_state is TerminalState.DELIVERED),
                sum(1 for b in recs if b.flow_id == c)) for c in ORDER}
-    return cfg, live, off
+    off_lost = {c: sum(1 for b in recs if b.flow_id == c and b.terminal_state in
+                       (TerminalState.QUEUE_OVERFLOW, TerminalState.TTL_EXPIRED)) for c in ORDER}
+    return cfg, live, off, live_lost, off_lost
 
 
 def main():
@@ -78,13 +91,16 @@ def main():
         d = os.path.join(a.runs, cfg)
         if not os.path.isdir(d):
             print("missing", d); continue
-        cfg, live, off = run_dir(d)
+        cfg, live, off, live_lost, off_lost = run_dir(d)
         print(cfg, {c: (f"live {live[c][0]}/{live[c][1]} = {live[c][0] / live[c][1]:.3f}",
                         f"replay {off[c][0] / off[c][1]:.3f}") for c in ORDER})
         dr, ad = LABEL[cfg]
+        print("   lost live", {c: round(live_lost[c] / live[c][1], 3) for c in ORDER},
+              "replay", {c: round(off_lost[c] / off[c][1], 3) for c in ORDER})
+        dmax = max(abs(live[c][0] / live[c][1] - off[c][0] / off[c][1]) for c in ORDER)
         lines.append(f"{dr} & {ad} & " + " & ".join(
-            f"{100 * live[c][0] / live[c][1]:.0f} ({100 * off[c][0] / off[c][1]:.0f})"
-            for c in ORDER) + r" \\")
+            f"{100 * live[c][0] / live[c][1]:.0f} ({100 * live_lost[c] / live[c][1]:.0f})"
+            for c in ORDER) + f" & {100 * dmax:.0f} \\\\")
     if a.out:
         open(a.out, "w").write("\n".join(lines) + "\n")
         print("wrote", a.out)

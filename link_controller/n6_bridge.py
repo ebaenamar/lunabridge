@@ -227,12 +227,15 @@ def worker_gateway(args):
                 continue
             seq = state["seq"]; state["seq"] += 1
             hdr = f"{seq}:{cls}:{teid}:{qfi}:{fiveqi}:{now:.3f}".encode()
-            b = {"seq": seq, "cls": cls, "n": len(inner), "t": now,
-                 "payload": hdr + b"|" + inner}
+            payload = hdr + b"|" + inner
+            # one size for buffer and link: bridge header + inner packet + 60 B
+            # of BPv7/convergence-layer overhead (the replay uses the same)
+            size = len(payload) + 60
+            b = {"seq": seq, "cls": cls, "n": size, "t": now, "payload": payload}
             with lock:
                 out.write(json.dumps({"seq": seq, "cls": cls, "teid": teid, "qfi": qfi,
-                                      "5qi": fiveqi, "n": len(inner), "t": now,
-                                      "t_cap": ts}) + "\n")
+                                      "5qi": fiveqi, "n": len(inner), "size": size,
+                                      "t": now, "t_cap": ts}) + "\n")
             gw.admit(b, now)
         state["done"] = True
     threading.Thread(target=reader, daemon=True).start()
@@ -253,7 +256,7 @@ def worker_gateway(args):
         clients[b["cls"]].send_bundle("dtn://relay.dtn/sink", b["payload"])
         log("fwd", b, now)
         sent_fwd += 1
-        t_free = max(t_free, now) + (len(b["payload"]) + 60) * 8 / args.rate_bps
+        t_free = max(t_free, now) + b["n"] * 8 / args.rate_bps
     left = gw.snapshot()
     for c, bs in left.items():
         for b in bs:
@@ -299,13 +302,15 @@ def run(args):
            f"delay {OWLT_MS}ms rate {RATE} loss 100%")
     lr = open(os.path.join(args.out, "relay.log"), "w")
     subprocess.Popen(f"ip netns exec {NS_R} {UD} -e dtn://relay.dtn/ -l 86400 "
-                     f"-a 127.0.0.1 -p {RELAY_AAP} -c mtcp:{IP_R},{RELAY_MTCP} -L {UD_LOG}",
+                     f"-a 127.0.0.1 -p {RELAY_AAP} -c mtcp:{IP_R},{RELAY_MTCP} -L {UD_LOG} "
+                     f"-S /tmp/lb_relay.aap2.sock",
                      shell=True, stdout=lr, stderr=lr)
     for i, cls in enumerate(CLASSES):
         lm = open(os.path.join(args.out, f"surf_{cls}_L{Ls[cls]}.log"), "w")
         node_L = 86400 if args.policy else Ls[cls]   # the live gateway enforces lifetimes
         subprocess.Popen(f"ip netns exec {NS_S} {UD} -e dtn://surf{i}.dtn/ -l {node_L} "
-                         f"-a 127.0.0.1 -p {SURF_AAP0 + i} -c mtcp:{IP_S},{SURF_MTCP0 + i} -L {UD_LOG}",
+                         f"-a 127.0.0.1 -p {SURF_AAP0 + i} -c mtcp:{IP_S},{SURF_MTCP0 + i} -L {UD_LOG} "
+                         f"-S /tmp/lb_surf{i}.aap2.sock",
                          shell=True, stdout=lm, stderr=lm)
     time.sleep(2.0)
     me = os.path.abspath(__file__)
