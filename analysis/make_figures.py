@@ -119,7 +119,7 @@ def fig_buffer_required(outdir: str) -> str:
     a = analytical(MISSION_PROFILE, gmax)
     total_rate, crit_rate = a["total_rate"], a["crit_rate"]
     gaps = np.linspace(60, gmax, 200)
-    fig, ax = plt.subplots(figsize=(COL_W, 1.6))
+    fig, ax = plt.subplots(figsize=(COL_W, 1.5))
     ax.plot(gaps / 3600, total_rate * gaps / GB, color="#c0392b",
             label="class-blind (whole backlog)")
     ax.plot(gaps / 3600, crit_rate * gaps / GB, color="#2e7d32",

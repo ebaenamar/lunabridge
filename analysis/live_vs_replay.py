@@ -100,7 +100,7 @@ def main():
         dmax = max(abs(live[c][0] / live[c][1] - off[c][0] / off[c][1]) for c in ORDER)
         lines.append(f"{dr} & {ad} & " + " & ".join(
             f"{100 * live[c][0] / live[c][1]:.0f} ({100 * live_lost[c] / live[c][1]:.0f})"
-            for c in ORDER) + f" & {100 * dmax:.0f} \\\\")
+            for c in ORDER) + f" & {int(100 * dmax + 0.5 + 1e-9)} \\\\")      # round half up (7.5 -> 8)
     if a.out:
         open(a.out, "w").write("\n".join(lines) + "\n")
         print("wrote", a.out)
